@@ -56,91 +56,44 @@ from .errors import MalformedPointError
 from .util import orderlen, string_to_number, number_to_string
 
 
-# When the order of a point can be used to normalise a multiplier, see
-# `AbstractPoint._fixed_ladder_usable()`, the multiplier is first replaced by
-# `AbstractPoint._canonical_scalar()` with a congruent value that is odd and
-# lies between the order and three times it, and so is bounded by that order
-# alone, and then recoded by `AbstractPoint._fixed_digits()` into a fixed
-# length sequence of non-zero digits, so that the number of point additions and
-# point doublings a multiplication performs is a function of the bit length of
-# that order and not of the multiplier.  The fixed digit count and the absence
-# of zero digits are what fix the number of point operations; for a generator
-# that holds once the precomputation table has been built, the first
-# multiplication also paying for building it.  That is what keeps the bit
-# length of a per signature nonce, or of the long term private key in key
-# generation and ECDH, out of the number of operations; see CVE-2024-23342,
-# GHSA-wj6h-64fc-37mp and OWASP ASVS 4.0 requirement 6.2.8.  The bit length of
-# the canonical multiplier is not itself constant -- it takes one of the three
-# values from the bit length of the order up to two more than it, decided by
-# the residue -- so what a multiplier is hidden from is the count of the point
-# operations, not the width of every operand they are driven by.
+# Nonce bit-length hardening, CVE-2024-23342 / GHSA-wj6h-64fc-37mp, OWASP ASVS
+# 4.0 requirement 6.2.8.  Where the order of a point can be used, see
+# `AbstractPoint._fixed_ladder_usable()`, a multiplier is replaced by
+# `AbstractPoint._canonical_scalar()` with a congruent odd value between the
+# order and three times it, then recoded by `AbstractPoint._fixed_digits()`
+# into a fixed length sequence of non-zero digits.  The digit count comes from
+# the public order and no digit is skipped, so the point additions and
+# doublings a ladder SCHEDULES follow that order alone -- for a generator once
+# its precomputation table is built.  Nothing is answered ahead of the recoding
+# either: a shortcut for zero, one, a multiple of the order or a negative
+# multiplier is the very short circuit CVE-2024-23342 is about, and signing,
+# key generation and ECDH all accept a secret of one.  Those multipliers still
+# get back what they always did, down to object identity, picked out by index
+# after the ladder has run.
 #
-# Every multiplier that is an integer is recoded, zero and one included, and
-# nothing is answered ahead of the recoding: not a multiplier of zero, not one
-# of one, not a multiple of the order and not a negative one.  A short circuit
-# for any of them would answer that multiplier in fewer point operations than
-# the ladder spends on all the others, which is exactly the short circuit
-# CVE-2024-23342 is about, and one and zero in particular are values the secret
-# bearing entry points of this library accept -- a private key or a nonce of
-# one is not refused by signing, key generation or ECDH -- so neither can be
-# dismissed as a value no secret ever takes.  What such a multiplier gets back
-# is the answer it has always got, down to the identity of the object: the
-# point at infinity for a multiplier of zero or of a multiple of the order, and
-# for a multiplier of one the very point that was multiplied.  That answer is
-# picked out by index after the ladder has run, so it costs the work every
-# other multiplier costs; it is only which of two ready answers is handed back
-# that the multiplier decides, not how much work was done to get there.
+# Two things are deliberately not claimed, and `SECURITY.md` records both: the
+# canonical multiplier takes one of three widths rather than a constant one,
+# and the at most two residues of any order that end a ladder with its
+# accumulator equal to the entry being added cost a twisted Edwards ladder one
+# doubling more than the schedule.  Per-operation cost varies too, integer
+# arithmetic costing according to operand limb width and the reduction modulo
+# the field prime being skipped where that is faster (see
+# `PointJacobi._double_with_z_1()`).
 #
-# Reading the bits of a multiplier is all the recodings do, so a multiplier
-# reaches them only as a plain integer: every multiplication first hands its
-# multiplier to `AbstractPoint._integer_multiplier()`, which asks the value for
-# its lossless integer through `operator.index()` and refuses anything that has
-# none with one and the same `TypeError` on every path.  That refusal is
-# decided by the type of the multiplier and never by its value, so it cannot
-# tell one integer from another, and it is what stops a value that merely
-# converts to an integer -- the decimal digits of a string, a float truncated
-# towards zero -- from multiplying a point by a number its caller never asked
-# for.
+# Three paths keep the multiplier driven ladder of releases up to 0.19.1: a
+# point constructed without an order, a point whose order the recoding cannot
+# use (none of the registered curves), and `PointJacobi.mul_add()`, used for
+# verification with public multipliers.  Signing, key generation and EdDSA
+# always take the recoded ladder, the generator they multiply carrying its
+# order; ECDH takes it only when the remote point carries one, which a point
+# decoded from a public encoding does not.  `SECURITY.md` records that residual
+# too; closing it needs an order attached where public points are decoded,
+# outside this module.
 #
-# Three paths keep the multiplier driven ladders of releases up to 0.19.1
-# instead: a point constructed without an order, which has nothing to normalise
-# a multiplier against; a point whose order the fixed length recoding cannot
-# use, which no curve this library registers declares; and the combined
-# `PointJacobi.mul_add()` used to verify signatures, whose multipliers are
-# derived from public values.  The number of point operations of the first two
-# follows the multiplier, so neither of them is side channel hardened, and a
-# caller that constructs such a point through the public constructors of this
-# module and multiplies it itself gets that unhardened ladder.  What is claimed
-# is narrower.  Signing, key generation and EdDSA
-# reach the recoded ladder for every curve this library registers, because the
-# generator they multiply is built with its order.  ECDH reaches it only for a
-# remote public point that carries one: a point that arrives from an encoding
-# -- `VerifyingKey.from_string()`, and so the DER, PEM and SSH readers built on
-# it -- is built without an order and nothing attaches one to it afterwards, so
-# multiplying it by a private key takes the fall-back ladder, whose point
-# doubling count follows the bit length of that private key.  A remote public
-# key handed over as a `VerifyingKey` this process derived from a `SigningKey`
-# does carry the order and is recoded.  That residual exposure is recorded in
-# `SECURITY.md`; removing it needs an order attached where public points are
-# decoded, which is not in this module.
-#
-# The number of operations, and the width of the multiplier they are driven
-# by, are all this hides.  The individual costs of those operations are not
-# uniform: Python integers take time proportional to their magnitude and, as
-# the comment in front of `PointJacobi._double_with_z_1()` explains, the
-# reduction modulo the field prime is deliberately skipped where that is
-# faster, so the coordinates the operations are performed on vary in width even
-# where nothing about the multiplier does.
-#
-# Width in bits of the digits the multiplier is recoded into, and so of the
-# odd multiples a precomputation table holds per digit position: a wider one
-# means fewer additions per multiplication against a larger table.  It is the
-# only width the recoding uses.  A narrower one cannot be made to work for any
-# order at all -- see `AbstractPoint._fixed_window()`, which is where the width
-# an order can carry is decided and where that is worked out -- so an order too
-# narrow to carry this one is left on the multiplier driven ladder instead of
-# being recoded more narrowly.  Every order any curve this library registers
-# declares is far wide enough.
+# Width in bits of the recoded digits, and so of the odd multiples a table
+# holds per digit position: wider means fewer additions against a larger table.
+# It is the only width the recoding uses; an order too narrow to carry it stays
+# on the multiplier driven ladder, see `AbstractPoint._fixed_window()`.
 _MUL_WINDOW = 4
 
 
@@ -597,44 +550,23 @@ class AbstractPoint(object):
         """
         Return a multiplier as a plain integer, refusing anything else.
 
-        The recodings a multiplication drives its ladders with read the bits of
-        the multiplier with shifts, masks and divisions.  Handing those a value
-        that merely converts to an integer -- the decimal digits of a string,
-        or a float truncated towards zero -- would multiply by a number the
-        caller never asked for, and handing them one that doesn't convert at
+        The recodings read the multiplier's bits with shifts, masks and
+        divisions.  A value that merely converts to an integer -- the decimal
+        digits of a string, a float truncated towards zero -- would multiply by
+        a number the caller never asked for, and one that does not convert at
         all would surface as whichever error the first arithmetic operation
         happens to raise, which differs between the integer implementations
-        this module can use.  Requiring the multiplier to implement
-        ``__index__()``, the protocol by which Python asks a number for its
-        lossless integer value, rejects both cases with one and the same
-        exception: `int`, `bool` and the ``mpz`` of both gmpy releases provide
-        it, while floats, strings, bytes and complex numbers do not.
-
-        `operator.index()` is what asks, rather than a direct call of the
-        method, because it also refuses a ``__index__()`` that answers with
-        something that is not an integer.  Calling the method directly would
-        return whatever it handed back, and a value that merely looks like a
-        number to the arithmetic that follows -- the string ``"3"`` reduces
-        modulo an order to three -- would again multiply the point by a number
-        the caller never asked for, which is the very case this helper exists
-        to prevent.
-
-        Nothing here reads the value of the multiplier, only its type, so this
-        step cannot tell one integer from another and cannot put a multiplier's
-        value into the work a multiplication performs.
-
-        The value is returned as a plain `int` because gmp object creation has
-        cumulatively higher overhead than the speedup we get from calculating
-        the recodings using gmp, the same reason `mul_add()` coerces its own
-        multipliers.
-
-        :param mult: the multiplier a caller passed to a multiplication
+        this module can use.  `operator.index()` refuses both with the same
+        exception: `int`, `bool` and the ``mpz`` of both gmpy releases answer
+        it losslessly while floats, strings, bytes and complex numbers do not,
+        and unlike a direct ``__index__()`` call it also refuses a method
+        answering with a non-integer.  Only the type is read, never the value.
+        A plain `int` is returned because gmp object creation costs
+        cumulatively more here than the speedup gmp gives the recodings, the
+        same reason `mul_add()` coerces its multipliers.
 
         :raises TypeError: if the multiplier is not an integer, or offers a
             ``__index__()`` that does not answer with one
-
-        :return: the multiplier as a plain integer
-        :rtype: int
         """
         try:
             return operator.index(mult)
@@ -654,53 +586,30 @@ class AbstractPoint(object):
         Returns ``_MUL_WINDOW`` when the order can carry it and zero when the
         order cannot be used at all, in which case `_fixed_ladder_usable()` is
         false and the multiplication falls back to the non-adjacent form
-        recoding of `_naf()`.  There is nothing in between, and deliberately
-        so.  A narrower width would in fact admit an order this one refuses,
-        its largest digit being smaller, but reaching for a second width to
-        rescue such an order would make the width a point is recoded at a
-        property of that point's order, which is a property the caller of a
-        public constructor chooses; one width for every point that has one
-        keeps the recoding a function of nothing but the order it is sized
-        from.
+        recoding of `_naf()`.  Nothing in between, deliberately: a narrower
+        second width would make the width a point is recoded at a property of
+        an order the caller chooses.
 
-        Two properties of the order are needed, and neither can be assumed
-        because the point constructors are public and accept an arbitrary
-        value.  Both are consequences of the mechanism rather than thresholds
-        chosen here, and every one of the twenty six curves this library
-        registers satisfies both, each declaring an odd generator order of a
-        hundred and ten bits or more:
+        Two properties of the order are needed, neither guaranteed by a public
+        constructor, both consequences of the mechanism rather than thresholds
+        picked here.  All twenty six registered curves satisfy both, each
+        declaring an odd order of 110 bits or more:
 
-        * it must be **known and odd**.  `_canonical_scalar()` adds a multiple
-          of the order to make a multiplier odd, which only works when the
-          order itself is odd, and `_fixed_digits()` requires an odd input.
-          An even order cannot be worked around: no odd number is congruent
-          to an even residue modulo an even order, so there is no canonical
-          value to recode in the first place.  Worse, the order of
-          ``2 ** (j * window)`` times the point collapses to
-          ``order // 2 ** min(v, j * window)`` for ``v``
-          the number of times two divides the order, so a partial result of the
-          ladder can reach the point at infinity part way through and the
-          sequence of addition formulas becomes a function of the multiplier
-          again.  ECDSA and SEC 1 both require the generator order to be prime,
-          so no conforming parameter set is affected; a caller who builds a
-          point of even order by hand keeps the behaviour of releases up to
-          0.19.1 for it.
-        * it must be **larger than the largest digit** the recoding can
-          produce, which is ``2 ** window - 1``.  The ladders answer a digit
-          with the odd multiple of the point that it names, and where the order
-          is no larger than that largest digit one of those odd multiples is a
-          multiple of the order, and so the point at infinity -- which the
-          affine entries of a multiplication table cannot hold at all, see
-          `PointJacobi._maybe_precompute()`.  Nothing is given up by leaving
-          such a point on the fall-back, either: a group of at most ``2 **
-          window - 1`` points hands over any multiplier to a search of at most
-          that many tries, so how long a multiplication of one takes tells an
-          attacker nothing they could not have had for free.
+        * **known and odd**, because `_canonical_scalar()` makes a multiplier
+          odd by adding a multiple of the order and `_fixed_digits()` requires
+          an odd input.  An even order also lets a partial result reach the
+          point at infinity part way through the ladder, which would make the
+          sequence of addition formulas follow the multiplier again.  ECDSA and
+          SEC 1 require a prime generator order, so no conforming parameter set
+          is affected.
+        * **larger than the largest digit**, ``2 ** window - 1``, since a digit
+          names an odd multiple of the point and where the order is no larger
+          one of those multiples is the point at infinity, which the affine
+          entries of a table cannot hold.  Nothing is given up: a group that
+          small yields any multiplier to a search of at most that many tries.
 
-        :param order: order of the point, or a false value when it is unknown
-
-        :return: the digit width to use, or zero
-        :rtype: int
+        A point either property fails for keeps the behaviour of releases up to
+        0.19.1.
         """
         if not order or not order & 1:
             return 0
@@ -715,22 +624,13 @@ class AbstractPoint(object):
         Can a point of `order` use the fixed length recoding of a multiplier?
 
         True exactly when `_fixed_window()` finds a digit width the order can
-        carry.  A point whose order it cannot -- one that reports no order, one
-        of even order, or one of a group narrower than the widest digit the
-        recoding can produce -- falls back to the non-adjacent form recoding of
-        `_naf()`: correct, just not hiding the width of the multiplier.
-
-        Every curve this library registers has an odd generator order wide
-        enough to carry the recoding, so every point built by multiplying one
-        of their generators -- which is every point `ecdsa.keys.SigningKey`
-        and `ecdsa.ecdsa` derive -- takes the fixed work path.  A point that
-        reaches the fall-back is one whose order the caller did not supply: the
-        public point encodings carry no order, so a point decoded by
-        `ecdsa.keys.VerifyingKey.from_string()` and its DER and PEM
-        counterparts reports none, and one built through the public
-        constructors of this module reports whatever the caller passed.  Such a
-        point is left on the fall-back rather than rejected, because rejecting
-        it would withdraw a documented way of building a point.
+        carry.  A point whose order it cannot -- no order, an even order, or a
+        group narrower than the widest digit -- falls back to the non-adjacent
+        form recoding of `_naf()`: correct, just not hiding the multiplier
+        width.  Every registered curve has an odd order wide enough, so the
+        fall-back is reached only when the caller supplied no usable order, and
+        such a point is left on it rather than rejected, as rejecting it would
+        withdraw a documented way of building a point.
         """
         return bool(cls._fixed_window(order))
 
@@ -740,63 +640,39 @@ class AbstractPoint(object):
         Bring a multiplier to the form the fixed length recoding expects.
 
         Returns an odd number congruent to ``mult`` modulo ``order`` and lying
-        in the interval that starts at ``order`` and is two orders wide,
-        whatever ``mult`` was.  Multiplying by the returned value gives the
-        same point as multiplying by ``mult``, because ``order`` times a point
-        of that order is the point at infinity, and thus adding a multiple of
-        the order to a multiplier does not change the result.
+        in the two-order-wide interval starting at ``order``, whatever ``mult``
+        was.  Multiplying by it gives the same point as multiplying by
+        ``mult``, since ``order`` times a point of that order is the point at
+        infinity.  The order is coerced to a plain integer first, so a point
+        whose order is a gmp object still answers with an ordinary one.
 
-        Two properties are what the ladders need of it, and both hold for every
+        Two properties are what the ladders need, and both hold for every
         residue of every order they accept:
 
-        * it is **odd**, which `_fixed_digits()` requires of its input, and
-          which is why `_fixed_window()` refuses an even order: the residue is
-          made odd by adding one order to it where it is even and two where it
-          is odd, and only an odd order can change the parity of a value that
-          way.  Selecting the multiple by index rather than by branch is what
-          keeps the work of this function the same for either parity;
+        * it is **odd**, which `_fixed_digits()` requires and which is why
+          `_fixed_window()` refuses an even order: one order is added where the
+          residue is even and two where it is odd, and only an odd order can
+          change a parity that way.  The multiple is selected by index rather
+          than by branch, so either parity costs the same;
         * it is **smaller than** ``2 ** (bit_length(order) + 2)``, since three
-          orders are, which is what lets `_fixed_digit_count()` size a recoding
-          of it from the (public) order alone.  That is the whole of what makes
-          the number of point operations of a multiplication a function of the
-          curve: no shorter multiplier is recoded into fewer digits, and no
-          digit is ever zero, so none is ever skipped.
+          orders are, which lets `_fixed_digit_count()` size a recoding from
+          the public order alone.  That is the whole of what makes the point
+          operation count follow the curve: no shorter multiplier is recoded
+          into fewer digits, and no digit is ever zero, so none is ever
+          skipped.
 
-        What this deliberately does **not** do is give every multiplier the
-        same bit length: three orders reach two bits above the order for some
-        curves and one for others, so the returned value is
-        ``bit_length(order)`` to ``bit_length(order) + 2`` bits wide depending
-        on the residue.  Python integers cost what their width costs, so a
-        per-operation cost that varies by a bit or two of operand width
-        remains, on top of the variation `ellipticcurve` already has from
-        skipping the reduction modulo the field prime where that is faster.
-        What is fixed is the number of point operations, which is the carrier
-        CVE-2024-23342 was reported on; the residue of a per-operation signal
-        is disclosed in ``SECURITY.md`` rather than claimed away.
-
-        Neither does it rule out every degenerate addition: the least
-        significant digit of the recoding is read off the low bits of the
-        returned value, and where that digit ``d`` satisfies ``2 * d ==
-        residue`` the last addition of the ladder is handed two equal operands
-        and answers with the doubling formula.  Writing ``m`` for
-        ``2 ** (window + 1)``, that happens for the residue ``2 * d`` when
-        ``order`` is congruent to ``2 ** window - d`` modulo ``m`` and for the
-        residue ``order - 2 * d`` when ``3 * order`` is congruent to
-        ``2 ** window + d`` modulo ``m``, over the odd ``d`` below
-        ``2 ** window``; at most two residues of any order satisfy either, and
-        for some -- SECP160r1 among the curves this library registers -- none
-        does.  `PointJacobi._mul_precompute()` records what that costs.
-
-        The order is coerced to a plain integer first, so that a point whose
-        order is a gmp object still answers with an ordinary one -- the same
-        reason `mul_add()` coerces its own multipliers, gmp object creation
-        costing more here than the arithmetic it speeds up.
-
-        :param mult: the multiplier to normalise
-        :param order: order of the point, which must be odd
-
-        :return: an odd value congruent to `mult` modulo `order`
-        :rtype: int
+        Two things it deliberately does **not** do, both disclosed in
+        ``SECURITY.md``.  The returned value is not of constant width --
+        ``bit_length(order)`` to ``bit_length(order) + 2`` bits depending on
+        the residue -- and a Python integer operation costs according to the
+        limb width of its operands, so a per-operation signal remains; what is
+        fixed is the point operation count, the carrier CVE-2024-23342 was
+        reported on.  Nor is every degenerate addition ruled out: for at most
+        two residues of any order -- none at all on some, SECP160r1 among the
+        registered curves -- twice the least significant digit equals the
+        value, leaving the last addition of the ladder with two equal operands,
+        which `PointJacobi._mul_precompute()` and
+        `PointEdwards._mul_precompute()` cost out for either curve shape.
         """
         order = int(order)
         # gmp object creation has cumulatively higher overhead than the
@@ -811,14 +687,12 @@ class AbstractPoint(object):
         """
         Number of `_fixed_digits()` digits needed for a point of `order`.
 
-        A canonical multiplier (see `_canonical_scalar()`) is below three times
-        the order, and therefore below ``2 ** (bit_length(order) + 2)``,
-        whatever the multiplier it was derived from was.  As many whole windows
-        as it takes to cover those bits are always both enough to hold every
-        canonical multiplier of this order and no more than the widest of them
-        needs, so the count is a function of the (public) order alone -- which
-        is what makes the number of point operations of a multiplication one
-        too.
+        Every canonical multiplier (see `_canonical_scalar()`) is below three
+        times the order and so below ``2 ** (bit_length(order) + 2)``, whatever
+        it was derived from, so covering those bits with whole windows holds
+        the widest one of this order and no more.  That makes both this count
+        and a multiplication's point operation count follow the public order
+        alone.
         """
         return (bit_length(order) + 2 + window - 1) // window
 
@@ -828,13 +702,11 @@ class AbstractPoint(object):
         Number of entries the multiplication table of `order` holds.
 
         Every digit position holds the ``2 ** (window - 1)`` odd multiples a
-        whole window reaches, so that a digit of any magnitude the recoding can
-        produce is answered by one entry of the position it belongs to and no
-        position needs a layout of its own.  See
-        `PointJacobi._maybe_precompute()`, which builds exactly this many, and
-        `PointJacobi.__setstate__()`, which uses this to tell a table it can
-        index from one it cannot.  On NIST256p that is 65 positions of 8
-        entries each, 520 in total.
+        whole window reaches, so any digit the recoding can produce is answered
+        by one entry of its own position.  `PointJacobi._maybe_precompute()`
+        builds exactly this many and `PointJacobi.__setstate__()` uses the
+        count to tell an indexable table from one it must discard.  NIST256p:
+        65 positions of 8 entries, 520 in total.
         """
         return cls._fixed_digit_count(order, window) * (1 << (window - 1))
 
@@ -843,16 +715,13 @@ class AbstractPoint(object):
         """
         Whether `table` is shaped like a table this code can index.
 
-        A restored multiplication table (see `PointJacobi.__setstate__()`) is
-        usable only if this layout would have built one of the same shape for
-        the same order: as many entries as `_fixed_table_length()`, each of
-        `arity` coordinates.  An order the fixed length recoding cannot use
-        indexes no table at all, so nothing is shaped for it.
-
-        This is a test of shape and not of contents: a table of the right shape
-        holding the wrong multiples is accepted, exactly as releases up to
-        0.19.1 accepted any table at all.  Checking the multiples would mean
-        computing them, which is the work the table exists to avoid.
+        A restored table (see `PointJacobi.__setstate__()`) is usable only if
+        this layout would have built one of the same shape for the same order:
+        `_fixed_table_length()` entries of `arity` coordinates each.  An order
+        the recoding cannot use indexes no table, so nothing is shaped for it.
+        Shape is checked, contents are not -- a correctly shaped table holding
+        wrong multiples is accepted, as releases up to 0.19.1 accepted any
+        table at all, and checking the multiples would mean recomputing them.
         """
         try:
             if not len(table):
@@ -876,17 +745,14 @@ class AbstractPoint(object):
         """
         Recode an odd number as a fixed length signed digit sequence.
 
-        Returns exactly ``count`` digits, least significant one first.  Every
-        digit is odd, and therefore never zero, and its absolute value is
-        smaller than ``2 ** window``.  A ladder driven by such a sequence
-        performs exactly one point addition per digit, so the number of
-        additions depends only on ``count`` and not on ``mult``.
-
-        ``mult`` must be odd and smaller than ``2 ** (count * window)``;
-        `_canonical_scalar()` and `_fixed_digit_count()` together guarantee
-        both.  This is the regular recoding of Joye and Tunstall; with
-        ``window`` equal to 1 it degenerates into a signed binary expansion
-        with digits taken from ``{-1, 1}``.
+        Returns exactly ``count`` digits, least significant first, every one
+        odd -- hence never zero -- with absolute value below ``2 ** window``,
+        so a ladder driven by the sequence performs one point addition per
+        digit and the addition count follows ``count`` alone, never ``mult``.
+        ``mult`` must be odd and below ``2 ** (count * window)``, which
+        `_canonical_scalar()` and `_fixed_digit_count()` together guarantee.
+        This is the regular recoding of Joye and Tunstall; at ``window`` 1 it
+        degenerates into a signed binary expansion over ``{-1, 1}``.
         """
         # gmp object creation has cumulatively higher overhead than the
         # speedup we get from calculating the digits using gmp so ensure use
@@ -996,23 +862,16 @@ class PointJacobi(AbstractPoint):
         """
         Build the multiplication table of a generator, once.
 
-        The table holds, for every digit position `_fixed_digits()` emits, the
-        odd multiples of this point that a digit in that position can select,
-        so `_mul_precompute()` can answer any digit with a single addition of
-        one affine entry.  Writing ``digits`` for `_fixed_digit_count()`, it
-        holds the ``digits * 2 ** (window - 1)`` entries
-        `_fixed_table_length()` names.  Building them costs ``window * (digits
-        - 1) + 1`` point doublings -- one for the step between consecutive odd
-        multiples of each position's base, and ``window - 1`` more to carry
-        that step to the base of the next position -- and ``digits * (2 **
-        (window - 1) - 1)`` point additions, the first entry of a position
-        being its base.  Nothing follows the most significant position, so its
-        base is not advanced.
-        On NIST256p that is 520 entries for 257 doublings and 455 additions,
-        and on NIST521p 1048 entries for 521 doublings and 917 additions.
-        Every later multiplication reads the finished table and performs no
-        doubling at all, which is what leaves its cost a function of the curve
-        and of nothing else.
+        For every digit position `_fixed_digits()` emits, the table holds the
+        odd multiples of this point a digit in that position can select, so
+        `_mul_precompute()` answers any digit with one addition of one affine
+        entry.  Writing ``digits`` for `_fixed_digit_count()`, that is the
+        ``digits * 2 ** (window - 1)`` entries `_fixed_table_length()` names,
+        built with ``window * (digits - 1) + 1`` doublings and ``digits * (2 **
+        (window - 1) - 1)`` additions.  NIST256p: 520 entries for 257 doublings
+        and 455 additions.  NIST521p: 1048 entries for 521 doublings and 917
+        additions.  Every later multiplication reads the finished table and
+        performs no doubling at all.
         """
         if not self.__generator or self.__precompute:
             return
@@ -1021,12 +880,11 @@ class PointJacobi(AbstractPoint):
         assert order
         window = self._fixed_window(order)
         if not window:
-            # An order that the fixed length recoding cannot use also cannot
-            # index this table, and an order small enough to divide one of the
-            # odd multiples below would put the point at infinity in it, which
-            # the two coordinates stored per entry cannot represent.  Leaving
-            # the table empty sends such points through `__mul__`'s table-less
-            # paths, which handle every order.
+            # An order the fixed length recoding cannot use also cannot index
+            # this table, and one small enough to divide an odd multiple below
+            # would put the point at infinity in it, which two coordinates per
+            # entry cannot hold.  Leaving the table empty sends such points
+            # through `__mul__`'s table-less paths, which handle every order.
             return
 
         # since this code will execute just once, and it's fully deterministic,
@@ -1073,35 +931,30 @@ class PointJacobi(AbstractPoint):
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        # The multiplication table is a rebuildable cache, so a restored one is
-        # kept only when this layout could have written it and would index it
-        # the same way: as many entries as `_fixed_table_length()`, each a pair
-        # of coordinates, for an order the fixed length recoding can use.  A
-        # table of any other shape -- one written by a release whose table held
-        # the successive doublings of this point rather than the odd multiples
-        # of each digit position, one absent from the state altogether, one
-        # truncated or otherwise malformed -- would be indexed with a layout it
-        # doesn't have, reading the wrong entries or running off the end of the
-        # list, so it is dropped here and `_maybe_precompute()` builds the
-        # right one on first use.  Dropping it is silent and raises nothing: an
-        # unrecognised cache is not a broken pickle, and the point it describes
-        # is restored in full by the assignment above.
+        # The pickle container remains the instance dictionary, but the cached
+        # multiplication table uses a new layout.  New code discards and
+        # rebuilds old-layout caches; old code cannot safely read new-layout
+        # caches.
         #
-        # That guards this direction only.  `__getstate__()` above is the plain
-        # instance dictionary that releases up to 0.19.1 wrote, table and all,
-        # so a state written here and read by one of those releases hands it a
-        # table of this layout to index as the successive doublings of the
-        # point -- and it has no test to notice, so it would answer with a
-        # wrong point rather than an error.  That residual is accepted and
-        # recorded in `SECURITY.md`; it is inherent to changing the layout of a
-        # cache that a serialised point has always carried, and the format
-        # itself is deliberately left as it was rather than narrowed, so that a
-        # state of this class stays the plain instance dictionary every release
-        # of this library has read and written.
+        # A restored table is kept only when this layout could have written it
+        # and would index it the same way: `_fixed_table_length()` entries of
+        # two coordinates each, for an order the fixed length recoding can use.
+        # Any other shape -- the successive doublings a release up to 0.19.1
+        # wrote, a table absent from the state, a truncated or malformed one --
+        # is dropped here and `_maybe_precompute()` builds the right one on
+        # first use.  Dropping raises nothing: an unrecognised cache is not a
+        # broken pickle, and the point itself is restored in full by the
+        # assignment above.
         #
-        # Both values are read from the state rather than from the instance, so
-        # that a state missing either key is answered like any other unusable
-        # one instead of raising something no release ever raised here.
+        # The other direction cannot be guarded from here.  An older release
+        # handed odd multiples to index as successive doublings has no check
+        # that would notice and would answer a wrong point rather than raise;
+        # that residual is accepted and recorded in `SECURITY.md`,
+        # `__getstate__()` staying the plain instance dictionary every release
+        # has read and written.  Both values below are read from the state and
+        # not from the instance, so a state missing either key is treated like
+        # any other unusable one instead of raising what no release ever raised
+        # here.
         table = state.get("_PointJacobi__precompute")
         order = state.get("_PointJacobi__order")
         if not self._fixed_table_shaped(table, order, 2):
@@ -1413,20 +1266,15 @@ class PointJacobi(AbstractPoint):
         """
         Rescale a list of Jacobi coordinates so that every Z equals 1.
 
-        A single modular inversion is used for the whole list, by inverting
-        the product of all the Z coordinates and then recovering each
-        individual inverse from it with two multiplications.  Modular
-        inversion is by far the most expensive field operation used here, so
-        inverting once instead of once per entry is what keeps the table this
-        builds affordable for `_mul_fixed()`, which rebuilds it on every call.
-
-        A zero Z, the representation of the point at infinity, is counted as
-        one in that product and comes back out as all-zero coordinates, so the
-        point at infinity is preserved.  That case is not hypothetical: the
-        table of odd multiples built by `_mul_fixed()` runs past the order of a
-        low order point, so the point at infinity does appear in it.  Letting a
-        zero into the product would leave every entry with zero coordinates,
-        as `numbertheory.inverse_mod()` maps zero to zero.
+        One modular inversion serves the whole list: the product of all the Z
+        coordinates is inverted once and each individual inverse recovered with
+        two multiplications.  Inversion being by far the costliest field
+        operation here, that is what keeps the table affordable for
+        `_mul_fixed()`, which rebuilds it every call.  A zero Z, the point at
+        infinity, counts as one in the product and comes back as all-zero
+        coordinates, so infinity is preserved -- not hypothetical, as the odd
+        multiple table of `_mul_fixed()` runs past the order of a low order
+        point, and a zero in the product would zero every entry.
         """
         # running products of the Z coordinates seen so far, with the point at
         # infinity counting as 1 so that it cannot zero the whole product
@@ -1456,82 +1304,35 @@ class PointJacobi(AbstractPoint):
         Multiply point by integer with precomputation table.
 
         `other` must be a canonical multiplier, see `_canonical_scalar()`.
-        Because every digit of the recoding is non-zero, this performs exactly
-        one point addition per digit and no point doublings at all, so the
-        number of point operations is a function of the curve order only.  The
-        sign of a digit costs the same as well: both polarities of the selected
-        table entry are derived for every digit and the answer is picked out by
-        index, so the number of field wide negations follows the number of
-        digits rather than the number of negative ones among them.  The
-        accumulator starts out as the point at infinity and every table entry
-        is affine, which means `_add()` takes its "Z1 is zero" branch on the
-        first digit, `_add_with_z_1()` on the second -- there both Z are one --
-        and `_add_with_z2_1()` on every one after that, a sequence that
-        likewise doesn't depend on the multiplier.  `mul_add()` hands its work
-        to `__mul__()` when both of its points carry a table, so a verification
-        against a `ecdsa.keys.VerifyingKey` on which `precompute()` was called
-        runs this method too, with multipliers derived from the signature and
-        therefore public.
+        Because every digit of the recoding is non-zero, this schedules exactly
+        one point addition per digit and no doublings, so the scheduled
+        operation count follows the curve order alone.  Digit signs cost the
+        same: both polarities of the selected entry are derived for every digit
+        and one is picked out by index, so the field wide negations follow the
+        digit count, never how many digits are negative.  The accumulator
+        starts as the point at infinity and every entry is affine, so `_add()`
+        takes its "Z1 is zero" branch on the first digit, `_add_with_z_1()` on
+        the second and `_add_with_z2_1()` on all the rest -- again independent
+        of the multiplier.  `mul_add()` defers to `__mul__()` when both its
+        points carry a table, so verifying against a `ecdsa.keys.VerifyingKey`
+        on which `precompute()` was called runs this method too, with public
+        multipliers.
 
-        The digits are consumed most significant one first, which is what makes
-        that claim about the sequence of branches true.  Write the recoding of
-        the canonical multiplier ``K`` as ``K = sum(d[i] * 2**(i * window))``;
-        the recurrence that produces it, see `_fixed_digits()`, also defines
-        the remainders ``K[j] = sum(d[i] * 2**((i - j) * window))`` over
-        ``i >= j``, so ``K[0] == K``, ``K[j] = d[j] + 2**window * K[j + 1]``,
-        and the accumulator held while the digit of position ``j`` is being
-        added is exactly ``2**(j * window) * K[j + 1] * 2**window``, that is
-        ``(K[j] - d[j])`` times this point.  Two properties follow, and both
-        are needed:
-
-        * every ``K[j]`` with ``j`` above zero is odd, positive and no larger
-          than ``(K - 1) // 2**window + 1``, each step of the recurrence
-          replacing a value with an odd one no larger than that fraction of it.
-          A canonical multiplier is below three orders, and three orders over
-          ``2**window`` plus one is below one order for every order
-          `_fixed_window()` accepts -- it accepts none that is not larger than
-          ``2**window - 1``.  So every such ``K[j]`` lies strictly between zero
-          and the order, is therefore non-zero modulo the order, and the
-          accumulator is the point at infinity only before the first addition;
-        * the accumulator equals its addend only where ``K[j]`` is congruent to
-          ``2 * d[j]`` modulo the order, which is where the addition formula
-          answers with ``_double_with_z_1()`` in place of its own.  For ``j``
-          above zero that cannot happen: ``K[j]`` is odd while ``2 * d[j]`` is
-          even, and by the bound above the two differ by less than the order,
-          so they cannot be congruent without being equal.  For ``j`` equal to
-          zero it can, and at most two residues of any order reach it -- none
-          at all for some, see the closed form in `_canonical_scalar()`'s note
-          on what it does not do.  That is a disclosed residual and not a hole
-          in the count: it is at most two multipliers out of the order, which
-          for a 256 bit curve is around two to the power of minus two hundred
-          and fifty five of them, it is one field operation cheaper rather than
-          one point operation more, and it leaves the number of calls to both
-          of the dispatchers above the same, the fall-back being entered inside
-          the addition formula and answered by ``_double_with_z_1()`` directly.
-          Which formula that is follows the digit count and not the multiplier:
-          ``_add_with_z2_1()`` for a recoding of three digits or more, and
-          ``_add_with_z_1()`` where it is two, the accumulator then still
-          carrying the ``z`` of one the first digit gave it.  Both compare
-          their operands after reducing modulo the field prime, which is why
-          the negation applied to a table entry below is reduced too.
-          ``SECURITY.md`` records the residual;
-        * the accumulator equals the negation of its addend only if ``K[j]`` is
-          congruent to zero modulo the order, which by the bound above again
-          leaves only ``j`` equal to zero, that is a multiplier that is a
-          multiple of the order.  There the sum being the point at infinity is
-          the correct answer, and it doesn't perturb the sequence of branches:
-          opposite points make the ``H`` of the addition formula zero but leave
-          its ``r`` non-zero, so the "both zero" short circuit that would call
-          the doubling formula instead is not taken.  Such a multiplier is
-          public by nature -- it cannot be a nonce, as
-          `ecdsa.ecdsa.Private_key.sign()` rejects those.
-
-        Consuming the digits the other way round provides none of that: the
-        partial sums are then arbitrary residues and do hit the point at
-        infinity for some multipliers -- ``2**bit_length(order) - order`` is
-        one of them -- which shows up as a second use of the "Z1 is zero"
-        branch and so as a difference in run time that depends on the
-        multiplier.
+        Digits are consumed most significant first, which is what makes that
+        branch sequence hold: the partial multiplier left above each position
+        is then odd and strictly between zero and the order -- a canonical
+        multiplier being below three orders, and three orders over
+        ``2**window`` below one order for every order `_fixed_window()` accepts
+        -- so the accumulator reaches infinity only before the first addition
+        and never equals its addend or its negation.  The other direction
+        provides none of that.  The exception is the least significant digit,
+        for the at most two residues per order `_canonical_scalar()` describes;
+        equal operands there make the addition formula substitute
+        `_double_with_z_1()` internally, one field operation less rather than
+        one point operation more and both dispatcher call counts unchanged.
+        Both formulas compare operands after reducing modulo the field prime,
+        which is why the negation applied to a table entry below is reduced
+        too.
         """
         X3, Y3, Z3, p = 0, 0, 0, self.__curve.p()
         _add = self._add
@@ -1546,22 +1347,16 @@ class PointJacobi(AbstractPoint):
         offset = (len(digits) - 1) * odd_multiples
         for dig in reversed(digits):
             # the entries of a position are the odd multiples in increasing
-            # order, and the sign of the digit is applied by negating the Y
-            # coordinate of the selected one.  Both polarities are derived for
-            # every digit and one of them is picked out by index, so the
-            # negation of a coordinate as wide as the field is paid once per
-            # digit whatever the signs of the digits are -- an `if` here would
-            # pay it only on the negative ones and leave the count of them,
-            # which follows the multiplier, in the run time.
-            #
-            # The negation is reduced modulo the field prime rather than left
-            # bare.  `_add_with_z_1()`, which this reaches on the second digit,
-            # reads two operands as equal by comparing the raw differences of
-            # their coordinates, so a bare negation would hide that equality
-            # from it and it would answer the correct point of a group whose
-            # recoding is two digits wide with the point at infinity instead.
-            # Every other addition formula reduces before comparing, so this
-            # costs one reduction per digit and changes no result.
+            # order, and a digit's sign is applied by negating the Y coordinate
+            # of the selected one.  Both polarities are derived and one picked
+            # out by index, so the field wide negation is paid once per digit
+            # whatever the signs are; an `if` would pay it only on the negative
+            # ones and leave their count in the run time.  The negation is
+            # reduced modulo the field prime because `_add_with_z_1()`, reached
+            # on the second digit, compares raw coordinate differences to spot
+            # equal operands: left bare it would answer the point at infinity
+            # in place of the correct point of a two-digit-wide group.  One
+            # reduction per digit, no result changed.
             X2, Y2 = precompute[offset + ((abs(dig) - 1) >> 1)]
             X3, Y3, Z3 = _add(X3, Y3, Z3, X2, (Y2, -Y2 % p)[dig < 0], 1, p)
             offset -= odd_multiples
@@ -1574,19 +1369,18 @@ class PointJacobi(AbstractPoint):
         """
         Multiply point by integer without a precomputation table.
 
-        This is the path taken by a point that is not a curve generator but
-        does know its order, most importantly by an ECDH exchange, where the
-        multiplier is the long term private key rather than a single-use nonce.
-        `other` must be a canonical multiplier, see `_canonical_scalar()`,
-        which also means the caller must have established that the order can be
-        used; a point whose order cannot is handled by `__mul__()` directly.
+        Taken by a point that is not a curve generator but does know its order,
+        most importantly by an ECDH exchange, where the multiplier is the long
+        term private key rather than a single-use nonce.  `other` must be a
+        canonical multiplier, see `_canonical_scalar()`, so the caller must
+        also have established that the order is usable; an unusable one is
+        handled by `__mul__()` directly.
 
-        Performs ``(count - 1) * window`` point doublings and ``count`` point
-        additions, with ``count`` derived from the curve order, plus the
-        constant one doubling and ``2 ** (window - 1) - 1`` additions that
-        build the table of odd multiples of this point.  None of those counts
-        depends on the multiplier.  For a 256 bit order and the window this
-        module uses that is 257 doublings and 72 additions, every time.
+        Schedules ``(count - 1) * window`` doublings and ``count`` additions,
+        ``count`` following the curve order, plus the one doubling and
+        ``2 ** (window - 1) - 1`` additions that build the table of odd
+        multiples of this point.  No count follows the multiplier.  For a 256
+        bit order and this module's window: 257 doublings, 72 additions.
         """
         p, a = self.__curve.p(), self.__curve.a()
         order = self.__order
@@ -1638,44 +1432,37 @@ class PointJacobi(AbstractPoint):
 
     def __mul__(self, other):
         """Multiply point by an integer."""
-        # This first test reads this point, not the multiplier: the point at
-        # infinity stays where it is whatever it is multiplied by, and no
-        # multiplier can be told anything about from the answer.
+        # Reads this point, not the multiplier: the point at infinity stays
+        # where it is whatever multiplies it, so the answer tells nothing.
         if not self.__coords[1]:
             return INFINITY
-        # Normalise the multiplier to a plain integer before it is used for
-        # anything at all, this method's own choice of ladder included, so that
-        # every path below reads bits of an integer and a value that is not one
-        # is refused the same way on all of them.  This reads the type of the
-        # multiplier and never its value; see `_integer_multiplier()`.
+        # To a plain integer before anything reads it, this method's own choice
+        # of ladder included, so every path below reads integer bits and
+        # refuses a non-integer alike.  Reads the type, never the value.
         other = self._integer_multiplier(other)
         order = self.__order
         fixed = self._fixed_ladder_usable(order)
         if fixed:
-            # Normalise the multiplier before ANY choice is made from its
-            # value, the shortcuts for a multiplier of zero or of one included.
-            # Such a shortcut is precisely the short circuit CVE-2024-23342 is
-            # about: it would answer those two multipliers in no point
-            # operations at all where every other one costs the full fixed
-            # number, and a nonce of one is not hypothetical --
-            # `sign_number()` accepts any value from one up.  Normalised, both
-            # of them run the same ladder as every other multiplier and cost
-            # exactly the same, and what a caller asking for either gets back
-            # is still what releases up to 0.19.1 gave them: the point at
-            # infinity, and this very object.  The one for a multiplier of one
-            # is picked out at the end of this method, after the work.
+            # Normalise before ANY choice is made from the multiplier's value,
+            # the shortcuts for zero and for one included.  Such a shortcut is
+            # exactly the short circuit CVE-2024-23342 is about: it would
+            # answer those two in no point operations where every other
+            # multiplier pays the full fixed count, and a nonce of one is
+            # reachable -- `sign_number()` accepts any value from one up.
+            # Normalised, both run the same ladder at the same cost and both
+            # still return what releases up to 0.19.1 returned; the answer for
+            # one is picked out at the end of this method, after the work.
             multiplier = self._canonical_scalar(other, order)
         else:
             # An order the fixed length recoding cannot use, or none at all.
-            # There is nothing to normalise a multiplier against, so the two
-            # shortcuts below cannot make the work depend on a multiplier any
-            # more than the ladder that follows them already does, and they
-            # keep returning what releases up to 0.19.1 returned: the point at
-            # infinity, and this very object -- with the order it knows, its
-            # generator flag and its multiplication table -- rather than an
-            # equal but freshly built point.  No path of this library that
-            # multiplies by a secret arrives here, see the comment further
-            # down.
+            # Nothing to normalise against, so the two shortcuts below cannot
+            # make the work follow the multiplier any more than the ladder
+            # after them already does, and they keep returning what releases up
+            # to 0.19.1 returned: the point at infinity, and this very object
+            # -- order, generator flag and table included -- rather than an
+            # equal but freshly built one.  Signing, key generation and EdDSA
+            # do not reach this fall-back; ECDH with a decoded remote point
+            # does, as documented below the fixed ladder.
             if not other:
                 return INFINITY
             if other == 1:
@@ -1694,36 +1481,32 @@ class PointJacobi(AbstractPoint):
             else:
                 product = self._mul_fixed(multiplier)
             # A multiplier of one is answered with this very object, as
-            # releases up to 0.19.1 answered it, but only once the ladder above
-            # has performed the same work every other multiplier pays for: the
-            # answer is picked out by index rather than by a branch that skips
-            # that work, so no multiplier is cheaper than any other.  The
-            # fall-back path below returned the same answer further up, ahead
-            # of a ladder whose work follows the multiplier anyway.
+            # releases up to 0.19.1 answered it, but only after the ladder
+            # above has done the work every other multiplier pays for: the
+            # answer is picked out by index, not by a branch, so no multiplier
+            # skips the scheduled ladder work.  The fall-back path returns the
+            # same answer further up, ahead of a ladder whose work follows the
+            # multiplier anyway.
             return (product, self)[other == 1]
 
-        # The order of this point is unknown or unusable, so the width of the
-        # multiplier cannot be normalised.  The number of iterations of the
-        # ladder below tracks the bit length of the multiplier -- a
-        # non-adjacent form can carry one digit further than that length -- and
-        # the number of point operations follows the multiplier with it, so
-        # this ladder is not side channel hardened, and a caller that builds a
-        # point without a usable order through the public constructors of this
-        # module and multiplies it here gets that.
+        # The order of this point is unknown or unusable, so the multiplier's
+        # width cannot be normalised.  The iteration count of the ladder below
+        # tracks the bit length of the multiplier -- a non-adjacent form can
+        # carry one digit past that length -- and the point operation count
+        # follows with it, so this ladder is not side channel hardened.
         #
         # What is claimed is narrower.  Every registered curve declares an
         # order the fixed length recoding can use, so signing, key generation
-        # and EdDSA -- which all multiply a generator built with its order --
-        # never arrive here.  An ECDH exchange does when the remote public
+        # and EdDSA -- all of which multiply a generator built with its order
+        # -- never arrive here.  An ECDH exchange does when the remote public
         # point was decoded from an encoding: those encodings carry no order
-        # and nothing attaches one afterwards, so the multiplier this ladder is
-        # driven by is the long term private key and the number of iterations
-        # follows its bit length.  A remote public key handed over as a
-        # `ecdsa.keys.VerifyingKey` this process derived from a
-        # `ecdsa.keys.SigningKey` does carry the order and takes the recoded
-        # path instead.  That residual exposure is recorded in `SECURITY.md`; a
-        # point a caller constructs without an order, or with one the recoding
-        # cannot use, keeps this ladder too.
+        # and nothing attaches one afterwards, so this ladder is driven by the
+        # long term private key and its iteration count follows that key's bit
+        # length.  A remote key handed over as an `ecdsa.keys.VerifyingKey`
+        # this process derived from a `ecdsa.keys.SigningKey` does carry the
+        # order and takes the recoded path.  `SECURITY.md` records this
+        # residual exposure, which a caller constructing a point without a
+        # usable order keeps too.
         self = self.scale()
         X2, Y2, _ = self.__coords
         X3, Y3, Z3 = 0, 0, 0
@@ -1971,28 +1754,25 @@ class Point(AbstractPoint):
 
     def __mul__(self, other):
         """Multiply a point by an integer."""
-        # This first test reads this point and not the multiplier: the point at
-        # infinity stays where it is whatever it is multiplied by, and releases
-        # up to 0.19.1 answered it before looking at the multiplier at all, so
-        # it comes ahead of the normalising step below as well.
+        # Reads this point and not the multiplier: the point at infinity stays
+        # where it is whatever multiplies it, and releases up to 0.19.1
+        # answered it before looking at the multiplier, so this stays ahead of
+        # the normalising step below.
         if self == INFINITY:
             return INFINITY
-        # Normalise the multiplier to a plain integer before it is used for
-        # anything, this method's own choice of ladder included; see
-        # `PointJacobi.__mul__()` and `_integer_multiplier()`.
+        # To a plain integer before anything reads it, this method's own choice
+        # of ladder included; see `PointJacobi.__mul__()`.
         other = self._integer_multiplier(other)
 
         # The X9.62 D.3.2 ladder further down performs a number of point
-        # operations that follows the multiplier, and each of those operations
-        # dispatches on the relation between its operands, so it cannot hide a
-        # secret multiplier.  Points whose order supports it therefore hand the
-        # work to the Jacobi coordinate implementation, which performs a fixed
-        # number of operations in a fixed sequence, and convert the result
-        # back.  Nothing is answered ahead of that hand-off -- not a multiplier
-        # of zero, not one of one, not a multiple of the order and not a
-        # negative one -- because every such shortcut would answer its
-        # multiplier in fewer point operations than the ladder spends on all
-        # the others, which is the short circuit CVE-2024-23342 is about.
+        # operations that follows the multiplier, and each dispatches on the
+        # relation between its operands, so it cannot hide a secret multiplier.
+        # Points whose order supports it hand the work to the Jacobi coordinate
+        # implementation, which schedules a fixed number of operations in a
+        # fixed sequence, and convert the result back.  Nothing is answered
+        # ahead of that hand-off -- not zero, not one, not a multiple of the
+        # order, not a negative multiplier -- because every such shortcut is
+        # the short circuit CVE-2024-23342 is about.
         order = self.__order
         if self._fixed_ladder_usable(order):
             product = (
@@ -2002,37 +1782,34 @@ class Point(AbstractPoint):
                 return INFINITY
             # For every multiplier but one the order is deliberately not
             # carried over, matching what `__add__()` and `double()` return and
-            # so what releases up to 0.19.1 returned here.  A multiplier of one
-            # those releases answered with this very object, order and all, and
+            # so what releases up to 0.19.1 returned here.  For a multiplier of
+            # one those releases returned this very object, order and all, and
             # so does this: the answer is picked out by index once the ladder
-            # above has performed the work every other multiplier pays for,
-            # rather than by a branch that skips it.
+            # above has done the work every other multiplier pays for, not by a
+            # branch that skips the scheduled work.
             return (Point(self.__curve, product.x(), product.y()), self)[
                 other == 1
             ]
 
         # Reached for an order the fixed length recoding cannot use and for no
-        # order at all.  Defect #5 of the plan -- a ladder whose length follows
-        # the multiplier -- is not remediated here but avoided above, and this
-        # ladder is left exactly as releases up to 0.19.1 wrote it, down to
-        # which shortcut answers which multiplier, because a point that reaches
-        # it has no order to normalise a multiplier against and so nothing to
-        # gain from a rewrite:
+        # order at all.  A ladder whose length follows the multiplier is
+        # avoided above rather than repaired here: this one is left exactly as
+        # releases up to 0.19.1 wrote it, down to which shortcut answers which
+        # multiplier, because a point reaching it has no usable order to
+        # normalise a multiplier against and so nothing to gain from a rewrite:
         #
-        #  * a point that reports no order cannot have a multiplier reduced
-        #    against one, so there is nothing for the recoding to be given;
-        #  * an even order admits no odd congruent multiplier at all, so the
-        #    recoding `_fixed_digits()` performs cannot represent one;
+        #  * a point reporting no order cannot have a multiplier reduced
+        #    against one, so there is nothing to hand the recoding;
+        #  * an even order admits no odd congruent multiplier, which is what
+        #    `_fixed_digits()` recodes;
         #  * an order no larger than the largest digit the recoding emits is a
         #    group in which a table entry would be the point at infinity, which
-        #    affine coordinates cannot hold -- and a group that small hands
-        #    over any multiplier to a search of at most that many tries anyway,
-        #    so how long a multiplication takes tells an attacker nothing they
-        #    could not have had for free.  See `_fixed_window()`, where both
-        #    bounds are decided;
-        #  * every curve this library registers declares an order the recoding
-        #    can use, so no signature, key generation or ECDH operation of this
-        #    library arrives here for want of one.
+        #    affine coordinates cannot hold -- and a group that small yields
+        #    any multiplier to a search of at most that many tries, so a timing
+        #    difference tells an attacker nothing new.  See `_fixed_window()`;
+        #  * every curve this library registers declares a usable order, so no
+        #    signature, key generation or ECDH operation arrives here for want
+        #    of one.
 
         def leftmost_bit(x):
             assert x > 0
@@ -2192,13 +1969,12 @@ class PointEdwards(AbstractPoint):
         """
         Build the multiplication table of a generator, once.
 
-        Same layout and the same number of entries as the table
-        `PointJacobi._maybe_precompute()` builds, and the same number of point
-        additions and point doublings to build them, except that entries are
-        ``(x, y, x * y % p)`` triples rather than pairs, as the addition
-        formula of this curve type consumes that product.  On Ed25519 that is
-        512 entries for 253 doublings and 448 additions, and on Ed448 896
-        entries for 445 doublings and 784 additions.
+        Same layout, entry count and build cost as the table
+        `PointJacobi._maybe_precompute()` builds, except that entries are
+        ``(x, y, x * y % p)`` triples rather than pairs, as this curve type's
+        addition formula consumes that product.  Ed25519: 512 entries for 253
+        doublings and 448 additions.  Ed448: 896 entries for 445 doublings and
+        784 additions.
         """
         if not self.__generator or self.__precompute:
             return self.__precompute
@@ -2256,10 +2032,9 @@ class PointEdwards(AbstractPoint):
         # No `__getstate__` is defined for this class, here or in any release
         # up to 0.19.1, so the state is the plain instance dictionary and
         # carries the multiplication table with it.  Same rule as
-        # `PointJacobi.__setstate__()`, which carries the full reasoning
-        # including the residual this guards only one direction of, with the
-        # three coordinates an entry of this curve type holds in place of the
-        # two of that one.
+        # `PointJacobi.__setstate__()`, which carries the full reasoning, with
+        # the three coordinates an entry of this curve type holds instead of
+        # two.
         self.__dict__.update(state)
         table = state.get("_PointEdwards__precompute")
         order = state.get("_PointEdwards__order")
@@ -2428,31 +2203,28 @@ class PointEdwards(AbstractPoint):
         Multiply point by integer with precomputation table.
 
         `other` must be a canonical multiplier, see `_canonical_scalar()`.
-        Because every digit of the recoding is non-zero, this performs exactly
-        one point addition per digit and no point doublings at all, so the
-        number of point operations is a function of the curve order only.  The
-        sign of a digit costs the same as well: both polarities of the selected
-        table entry are derived for every digit and the answer is picked out by
-        index, so the number of field wide negations -- two per digit here,
-        since the product of the affine coordinates is negated along with the x
-        one -- follows the number of digits rather than the number of negative
-        ones among them.
+        Because every digit of the recoding is non-zero, this schedules exactly
+        one point addition per digit and no point doublings, so the scheduled
+        operation count is a function of the curve order alone.  Digit signs
+        cost the same: both polarities of the selected entry are derived for
+        every digit and the answer picked out by index, so the field wide
+        negations -- two per digit here, as the product of the affine
+        coordinates is negated along with the x one -- follow the digit count,
+        never how many digits are negative.
 
-        The digits are consumed most significant one first for the reason
-        spelled out in `PointJacobi._mul_precompute()`: it is what keeps every
-        accumulator away from its addend, and the addition formula of this
-        curve type falls back to the doubling formula when handed two operands
-        with the same product of affine coordinates.  For points of the odd
-        order subgroup that only happens when the operands are equal, since the
-        at most four points that share such a product differ from each other by
-        a point of even order.  The one place that argument leaves open is the
-        least significant digit, and at most two residues of any order do reach
-        it -- one of Ed25519's and one of Ed448's, by the closed form in
-        `_canonical_scalar()`.  Unlike the Weierstrass ladder this one pays a
-        counted point doubling for that, so for those residues the doubling
-        count of a multiplication is one rather than zero; ``SECURITY.md``
-        records the residual, whose share of the multipliers of either curve is
-        below two to the power of minus two hundred and fifty.
+        Digits are consumed most significant first for the reason spelled out
+        in `PointJacobi._mul_precompute()`: it keeps every accumulator away
+        from its addend, and this curve type's addition formula falls back to
+        the doubling formula when handed two operands sharing the product of
+        affine coordinates.  Within the odd order subgroup that needs the
+        operands to be equal, the at most four points sharing such a product
+        differing by a point of even order.  The least significant digit is the
+        one case left open, for one residue of Ed25519's order and one of
+        Ed448's; unlike the Weierstrass ladder this one pays a counted doubling
+        there, making the doubling count of a multiplication one rather than
+        zero.  ``SECURITY.md`` records the residual, whose share of either
+        curve's multipliers is below two to the power of minus two hundred and
+        fifty.
         """
         X3, Y3, Z3, T3, p, a = 0, 1, 1, 0, self.__curve.p(), self.__curve.a()
         _add = self._add
@@ -2467,13 +2239,12 @@ class PointEdwards(AbstractPoint):
         offset = (len(digits) - 1) * odd_multiples
         for dig in reversed(digits):
             # the entries of a position are the odd multiples in increasing
-            # order, and the sign of the digit is applied by negating the x
-            # coordinate (and with it the x*y product) of the selected one.
-            # Both polarities are derived for every digit and one of them is
-            # picked out by index, so the two negations of coordinates as wide
-            # as the field are paid once per digit whatever the signs of the
-            # digits are; an `if` here would pay them only on the negative
-            # ones and leave the count of those in the run time.
+            # order, and a digit's sign is applied by negating the x coordinate
+            # (and with it the x*y product) of the selected one.  Both
+            # polarities are derived and one picked out by index, so the two
+            # field wide negations are paid once per digit whatever the signs
+            # are; an `if` would pay them only on the negative ones and leave
+            # their count in the run time.
             X2, Y2, T2 = precompute[offset + ((abs(dig) - 1) >> 1)]
             negative = dig < 0
             X3, Y3, Z3, T3 = _add(
@@ -2499,20 +2270,18 @@ class PointEdwards(AbstractPoint):
         """
         Multiply point by integer without a precomputation table.
 
-        This is the path taken by points of a known order that are not marked
-        as curve generators.  `other` must be a canonical multiplier, see
+        Taken by points of a known order that are not marked as curve
+        generators.  `other` must be a canonical multiplier, see
         `_canonical_scalar()`.
 
-        Performs ``count * window`` point doublings and ``count`` point
-        additions, with ``count`` derived from the curve order, plus the
-        constant one doubling and ``2 ** (window - 1) - 1`` additions that
-        build the table of odd multiples of this point.  None of those counts
-        depends on the multiplier, with the single exception
+        Schedules ``count * window`` doublings and ``count`` additions,
+        ``count`` following the curve order, plus the one doubling and ``2 **
+        (window - 1) - 1`` additions that build the table of odd multiples of
+        this point.  No count follows the multiplier, save the one exception
         `_mul_precompute()` records: the at most two residues of an order whose
-        least significant digit leaves the last addition of the ladder with two
-        equal operands pay one counted doubling more than every other
-        multiplier, the addition formula of this curve type answering equal
-        operands with the doubling one.
+        least significant digit leaves the last addition with two equal
+        operands pay one counted doubling more, this curve type's addition
+        formula answering equal operands with the doubling one.
         """
         p, a = self.__curve.p(), self.__curve.a()
         order = self.__order
@@ -2568,9 +2337,8 @@ class PointEdwards(AbstractPoint):
         # `PointJacobi.__mul__()`
         if not X2 or not T2:
             return INFINITY
-        # normalised to a plain integer before it is used for anything, this
-        # method's own choice of ladder included; see `PointJacobi.__mul__()`
-        # and `_integer_multiplier()`
+        # to a plain integer before anything reads it, this method's own choice
+        # of ladder included; see `PointJacobi.__mul__()`
         other = self._integer_multiplier(other)
         order = self.__order
         fixed = self._fixed_ladder_usable(order)
@@ -2606,9 +2374,9 @@ class PointEdwards(AbstractPoint):
             else:
                 product = self._mul_fixed(multiplier)
             # A multiplier of one is answered with this very object, as
-            # releases up to 0.19.1 answered it, but only once the ladder above
-            # has performed the same work every other multiplier pays for; see
-            # `PointJacobi.__mul__()`.
+            # releases up to 0.19.1 answered it, but only after the ladder
+            # above has done the work every other multiplier pays for, so no
+            # multiplier skips the scheduled work; see `PointJacobi.__mul__()`.
             return (product, self)[other == 1]
 
         X3, Y3, Z3, T3 = 0, 1, 1, 0  # INFINITY in extended coordinates

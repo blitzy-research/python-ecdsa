@@ -276,17 +276,13 @@ class Private_key(object):
         # `inverse_mod()` maps zero to zero, so `sinv` is zero on exactly the
         # inputs the unblinded inverse was.  This is not constant time.
         #
-        # The factor has to be invertible modulo `n` for the blinding to
-        # cancel, which `randrange()` alone does not give: the generator order
-        # of a curve built by hand can be composite, and a factor sharing a
-        # divisor with it would make `inverse_mod()` raise for a nonce that
-        # signs perfectly well unblinded.  Draw again until the factor is
-        # coprime with `n` -- a rejection that depends only on freshly drawn
-        # randomness and never on the nonce.  Every curve this library
-        # registers has a prime generator order, so the first draw is always
-        # accepted there.  With the factor invertible, `b * k % n` shares its
-        # divisors with `n` exactly as `k` does, so this raises on the same
-        # nonces the unblinded inverse raised on and on no others.
+        # Draw until `b` is a unit modulo `n`.  Multiplying `k` by a unit
+        # preserves `gcd(k, n)`, so the blinded operand is invertible on
+        # exactly the nonces the bare one was and the blinding cancels;
+        # registered curve orders are prime, so every non-zero draw is usable
+        # there and only a curve built by hand with a composite order can
+        # reject one.  The rejection reads freshly drawn randomness and never
+        # the nonce.
         #
         # Drawing the factor makes this method depend on the entropy source
         # for the first time, including when the caller supplied `random_k`

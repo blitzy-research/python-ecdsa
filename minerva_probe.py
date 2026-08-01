@@ -16,22 +16,22 @@ signature:
     CWE-203 (Observable Discrepancy), CWE-208 (Observable Timing
     Discrepancy), CWE-385 (Covert Timing Channel)
 
-An observer who can ask for many signatures under one key, time them
-and keep the fastest learns a few high-order bits of each nonce; enough
-of those partial leaks assemble into a Hidden Number Problem lattice
-that recovers the long-term private scalar.  The quantity to drive down
-is therefore the dependence of signing time on ``bit_length(k)``, and
-the number that matters is how many timed signatures an observer needs
-before that dependence becomes statistically visible.
+An observer who can ask for many signatures under one key, time them and
+keep the fastest learns a few high-order bits of each nonce; enough of
+those partial leaks assemble into a Hidden Number Problem lattice that
+recovers the long-term private scalar.  The quantity to drive down is
+therefore the dependence of signing time on ``bit_length(k)``.
 
-This script estimates that number.  It re-runs the battery over
-prefixes of the observations it collected and reports the earliest of
-those configured prefixes at which any test rejects, which brackets the
-number from above rather than pinning it: the true threshold lies
-between that prefix and the one before it.  Run it before and after a
-change to the arithmetic layer and compare the two reports: the collapse
-of the per-bucket trend, and the growth of that earliest rejecting
-prefix, is the evidence.
+This script measures where that dependence shows up in a sample it
+collects itself.  It re-runs the battery over a configured list of
+prefixes of those observations and reports the earliest rejecting
+configured prefix: the smallest entry of that list at which any test
+rejects.  That is an observation about the prefixes tested and nothing
+more.  Rejection is not taken to be monotone in the sample size, so no
+untested count is claimed either way and no threshold interval is
+inferred.  Run the script before and after a change to the arithmetic
+layer and compare the two reports: the collapse of the per-bucket trend,
+and the growth of that earliest rejecting prefix, is the evidence.
 
 What this script does NOT do
 ----------------------------
@@ -48,9 +48,9 @@ which took 43,190,069 observations to see.
 
 Method
 ------
-Two complementary modes, both driven in-process.  Neither opens a
-socket, shells out to a capture tool, needs a privilege, takes a
-command line argument or writes a file.
+Two complementary modes, both driven in-process: neither opens a socket,
+shells out to a capture tool, needs a privilege, takes a command line
+argument or writes a file.
 
 * Mode 1 -- controlled nonce bit widths.  A nonce of an exactly known
   bit width is injected through the documented ``k=`` parameter of
@@ -67,8 +67,8 @@ The statistics mirror ``tlsfuzzer/analysis.py::analyze_bit_sizes`` --
 ``sign_test``, ``paired_t_test``, ``wilcoxon_test`` and
 ``bootstrap_test``, each bucket paired against the largest-bit-length
 bucket, under a Bonferroni correction of the configured alpha.  They are
-hand-rolled here from the standard library on purpose: the probe adds no
-new dependency, and the external harness is a separate project that is
+hand-rolled from the standard library on purpose: the probe adds no new
+dependency, and the external harness is a separate project that is
 deliberately not vendored.
 
 The script lives outside ``src/`` and is not named ``test_*.py``
@@ -82,38 +82,37 @@ No arguments and no privileges::
 
     python minerva_probe.py
 
-Everything tunable is a module-level constant below, and the report
-prints all of them.  Raise ``REPEAT`` towards the external harness
-default of 100000 for a more sensitive run at proportional cost.
-
-Every one of those constants is checked before anything is timed.  A
-value a measurement could not be carried out under -- a count of none
-where one is needed, a trim the estimator it labels cannot be computed
-at, a cap that throws away more pairs than the interval it feeds
-admits, a "prefix" that is really the sample with its tail cut off --
-stops the run naming the constant, rather than spending minutes
-producing a number that turns out to be a property of the edit.
+Everything tunable is a module-level constant and the report prints all
+of them, the two that sit with the code they parameterise -- the number
+of clock reads the granularity estimate takes and the factor the
+standard error of a median is scaled by -- included.  Raise ``REPEAT``
+towards the external harness default of 100000 for a more sensitive run
+at proportional cost.  Every one of those constants is validated before
+anything is timed, and a value no measurement could be carried out under
+-- a count of none where one is needed, a trim its estimator cannot be
+computed at, a cap that throws away more pairs than the interval it
+feeds admits, a "prefix" that is really the sample with its tail cut off
+-- stops the run naming the constant rather than producing a number that
+is a property of the edit.
 
 The exit status says whether there is a report, not whether the report
 found anything: ``0`` when every requested curve produced the evidence
 it was asked for -- a dependence detected or not -- and ``2`` when the
 analysis is unavailable, meaning some of that evidence was never
 produced or came out of a collection that cannot be trusted.  Detection
-deliberately does not fail the run.  The "before" half of a
-before/after comparison has to be collectable, so a leak that this
-instrument can still see is a result, not an error, and ``tox -e leak``
-stays usable against unhardened arithmetic.  The external harness
-spends its exit code 1 on detection instead; the difference is
-deliberate, and the closing validity section states which reading
-applies.  Exit status ``1`` is reserved for the self check below.
+deliberately does not fail the run: the "before" half of a before/after
+comparison has to be collectable, so a leak this instrument can still
+see is a result rather than an error, and ``tox -e leak`` stays usable
+against unhardened arithmetic.  The external harness spends its exit
+code 1 on detection instead, and the closing validity section states
+which reading applies.
 
-The run begins with a self check of its own verdict paths, on synthetic
-inputs and before anything is timed, and stops with a non-zero exit
-status if any of them is wrong.  It costs a fraction of a second and
-guards the one mistake an instrument like this can make silently:
-reporting a reassuring nondetection out of a comparison that never
-happened.  Its checks are explicit comparisons rather than ``assert``
-statements, so that ``python -O`` cannot remove them.
+Exit status ``1`` is reserved for the self check, which runs first, on
+synthetic inputs, before anything is timed, and guards the one mistake
+an instrument like this can make silently: reporting a reassuring
+nonrejection out of a comparison that never happened.  Its checks are
+explicit comparisons rather than ``assert`` statements, so that ``python
+-O`` cannot remove them.
 
 Reading the output
 ------------------
@@ -121,30 +120,26 @@ Reading the output
   medians fall as the bit width falls, monotonically.  Judge that on two
   numbers together, never one: ``rho`` near +1 says the ordering is
   there, and the span expressed in bucket standard errors says whether
-  the ordering is bigger than the noise.  An ordering across a span of
-  one or two noise widths is what chance produces over a handful of
-  buckets; an ordering across tens of noise widths is the leak.  The
-  span in microseconds is printed too, and it is the right number for
-  the SIZE of the effect -- but not for whether the effect is
-  resolvable.  Neither number travels between machines: the standard
-  error the span is divided by falls with the observation count and
-  depends on the local noise, so the two spans are a within-run scale
-  and comparable only across runs configured alike.  Note also that
-  removing a dependence on the nonce tightens the noise floor as
-  well, so between two runs the microsecond span and the span in
-  standard errors move by different factors
-* ``smallest detectable N`` -- the headline.  The earliest of the
+  the ordering is bigger than the noise.  A span of one or two noise
+  widths is what chance produces over a handful of buckets; tens of
+  noise widths is the leak.  The microsecond span is the right number
+  for the SIZE of the effect and the wrong one for whether it is
+  resolvable.  Neither number travels between machines, and removing a
+  dependence on the nonce tightens the noise floor as well, so between
+  two runs the two spans move by different factors
+* ``earliest rejecting prefix`` -- the headline.  The smallest of the
   configured prefix sizes at which any of the three p-value tests
   rejects at the corrected alpha, so its resolution is the spacing of
-  that list; higher is better, and "not detected" -- no configured
-  prefix rejected -- is the best this instrument can say, never that
-  there is nothing there.  It has four states, and two
-  of them are not results: ``unavailable`` when a comparison carried a
-  value that is not a finite number, and ``insufficient`` when no
-  comparison produced a p-value at all.  Neither is a nondetection --
-  an untested sample count bounds nothing -- so "not detected at
-  N <= x" is printed only over the prefixes a test actually ran over,
-  and x names the largest of those rather than the observation count
+  that list and it says nothing about the counts between two entries of
+  it; later is better, and "no rejection at the tested prefixes" is the
+  best this instrument can say, never that there is nothing there.  It
+  has four states, and two of them are not results: ``unavailable`` when
+  a comparison carried a value that is not a finite number, and
+  ``insufficient`` when no comparison produced a p-value at all.
+  Neither is a nonrejection -- a prefix no test ran over supports no
+  statement -- so "no rejection at the tested prefixes through N = x" is
+  printed only over the prefixes a test actually ran over, and x names
+  the largest of those rather than the observation count
 * the calibration anchors -- what the same measurement cost elsewhere,
   so a result can be situated without reading anything else
 """
@@ -167,8 +162,10 @@ from ecdsa.util import bit_length, string_to_number
 
 
 # --------------------------------------------------------------------
-# Tunable parameters.  Every one of them is printed in the report, so a
-# run is reproducible from its own output.
+# Tunable parameters.  Every one of them is printed in the report, as
+# are `CLOCK_READS` and `MEDIAN_SE_FACTOR`, which are declared beside the
+# code they parameterise rather than here, so the configuration of a run
+# can be read off its own output.
 # --------------------------------------------------------------------
 
 # Curves to probe, by ``ecdsa.curves.Curve.name``.  NIST256p is the
@@ -238,7 +235,10 @@ EXACT_BINOM_MAX_N = 1000
 ALPHA = 1e-6
 
 # Sample counts at which the battery is re-run over a prefix of the
-# Mode 2 observations, to find the smallest N that still detects.
+# Mode 2 observations, to find the earliest of them that rejects.  What
+# is learned is a statement about these counts and not about the ones
+# between them, so the spacing of the list is the resolution of the
+# headline it produces.
 PREFIX_SIZES = [500, 1000, 2000, 5000, 10000, 20000]
 
 # A Mode 2 bucket needs this many observations before it is tested, and
@@ -345,8 +345,8 @@ CLOCK = timeit.default_timer
 # under bounds of its OWN, fixed once here.  Retuning a measurement
 # constant for a run then changes the measurement, which is the point of
 # a tunable, without changing what the self check measures -- a coupling
-# that used to report a retuned constant as "a decision path of the
-# report is wrong", blaming the report for the configuration.
+# that reports a retuned constant as "a decision path of the report is
+# wrong", blaming the report for the configuration.
 #
 # This is the same reasoning `CHECK_PAIRS` already applied to
 # ``MIN_BUCKET_SAMPLES``, extended to the rest.
@@ -359,7 +359,7 @@ def measurement_limits(gap, most, sizes, alpha):
     *gap* is how many signing attempts apart two observations may be and
     still form a pair, *most* the greatest number of buckets that may be
     compared against the reference, *sizes* the prefix ladder the
-    smallest-N scan walks, and *alpha* the significance level the
+    prefix scan walks, and *alpha* the significance level the
     Bonferroni correction divides.
     """
     return {"gap": gap, "most": most, "sizes": sizes, "alpha": alpha}
@@ -457,9 +457,9 @@ MODE_SEPARATOR = " mode "
 def mode_scope(name, mode):
     """The evidence and problem scope of one mode of one curve.
 
-    Every scope string in the report comes from here.  They used to be
-    spelled out at each site, and a scope that is spelled differently in
-    two places is two scopes: the tally counts one measurement twice and
+    Every scope string in the report comes from here rather than being
+    spelled out at each site, because a scope spelled differently in two
+    places is two scopes: the tally counts one measurement twice and
     `note_missing_evidence()` reports a problem against a name no other
     part of the report uses.
     """
@@ -508,7 +508,7 @@ def note_unproduced(name):
 # comparison produced a p-value (``insufficient``), or one produced a
 # value that could not be read (``unavailable`` from
 # `detection_state()`, ``invalid`` from `scan_headline()`).  Every other
-# state -- a detection, a nondetection, a smallest-N -- rests on a
+# state -- a rejection, a nonrejection, an earliest prefix -- rests on a
 # comparison that was actually carried out.
 NON_RESULT_STATES = ["insufficient", "unavailable", "invalid"]
 
@@ -611,14 +611,14 @@ def report_status(problems, records):
 
     ``EXIT_REPORTED`` only when nothing was recorded against the run AND
     every measurement it was asked for carried out a comparison.  Both
-    conditions are needed, and the second is the one this instrument
-    learned the hard way: a mode can reach the end of its report having
-    compared nothing at all -- every bucket below the testable floor,
-    say -- and that state prints as "insufficient evidence" throughout
-    the report while leaving no problem behind it.  Reading the status
-    off the problem list alone therefore told a caller that a run which
-    measured nothing was usable as evidence, which is the one thing the
-    status exists to prevent.
+    conditions are needed, and the second is the load-bearing one: a mode
+    can reach the end of its report having compared nothing at all --
+    every bucket below the testable floor, say -- and that state prints
+    as "insufficient evidence" throughout the report while leaving no
+    problem behind it.  Reading the status off the problem list alone
+    would therefore tell a caller that a run which measured nothing is
+    usable as evidence, which is the one thing the status exists to
+    prevent.
 
     Pure, for the same reason `evidence_tally()` is: the self check pins
     this table of outcomes directly.
@@ -699,9 +699,9 @@ def setting_problems(alpha, gap, most, floor):
 
     * an *alpha* outside the open unit interval is not a significance
       level.  At zero no p-value can ever fall below the corrected
-      threshold, so "not detected" is guaranteed however large a
+      threshold, so a nonrejection is guaranteed however large a
       dependence is; at one or above every comparison rejects, so
-      "detected" is guaranteed however flat the timing is.  Either way
+      a rejection is guaranteed however flat the timing is.  Either way
       the printed verdict is a property of the setting rather than of
       the measurement.
     * a proximity bound below one attempt refuses every pair, so every
@@ -721,9 +721,9 @@ def setting_problems(alpha, gap, most, floor):
 
     Deliberately NOT listed: an empty ``PREFIX_SIZES``.  Dropping the
     intermediate rungs is a legitimate edit, since the scan always adds
-    the full sample as its last rung, so the smallest-N bound is simply
-    coarser.  A setting that costs detail is not a setting that makes
-    the report unreadable.
+    the full sample as its last rung, so the earliest rejecting prefix is
+    simply coarser.  A setting that costs detail is not a setting that
+    makes the report unreadable.
 
     Pure and parameterised so the self check can exercise the table
     without retuning the module.
@@ -944,7 +944,7 @@ def list_problems(settings):
 
     Three of the four may legitimately be EMPTY and are checked for
     their contents only.  An empty ``PREFIX_SIZES`` costs the
-    intermediate rungs of the smallest-N scan and nothing else; an empty
+    intermediate rungs of the prefix scan and nothing else; an empty
     ``CONTROLLED_BIT_DROPS`` leaves Mode 1 with no bucket, which the
     report already names as insufficient evidence while Mode 2 still
     runs; and an empty ``CURVE_NAMES`` is answered by the run itself,
@@ -1524,14 +1524,6 @@ def trimmed_mean_sorted(ordered, proportion):
     would empty the sample falls back to the median, so the estimator is
     always defined.
 
-    That fallback is why `is_trim_proportion()` exists and why
-    `bootstrap_test()` refuses a proportion of one half or more before
-    resampling: the value this function returns for such a proportion is
-    a perfectly good number, it is simply the median rather than the
-    trimmed mean the caller asked for, and an interval labelled with a
-    trim it did not perform is worse than no interval.  The two
-    contracts are complementary -- total here, selective there.
-
     A proportion below zero, and any proportion that is not a finite
     number, are refused outright rather than trimmed with.  The negative
     case would make ``cut`` negative, and a negative cut turns the slice
@@ -1550,13 +1542,15 @@ def trimmed_mean_sorted(ordered, proportion):
     raising in the middle of a measurement.
 
     A proportion at one half or above is a different case and is
-    deliberately NOT refused here.  It is not a fabrication: the two
-    cuts meet, the core empties, and the median fallback below is then
-    the only defined answer left -- which is a statistic, just not the
-    trimmed mean a row labelled with that proportion answers to.  So it
-    is refused where it would be REPORTED, by `bootstrap_test()`, which
-    can name the constant it came from, and before anything is timed, by
-    `every_trim()`.  This estimator stays total.
+    deliberately NOT refused here.  It is not a fabrication: the two cuts
+    meet, the core empties, and the median fallback is then the only
+    defined answer left -- a statistic, just not the trimmed mean a row
+    labelled with that proportion answers to, and an interval labelled
+    with a trim it did not perform is worse than no interval.  So it is
+    refused where it would be REPORTED, by `bootstrap_test()`, which can
+    name the constant it came from, and before anything is timed, by
+    `every_trim()`.  This estimator stays total; those two are selective,
+    which is why `is_trim_proportion()` exists.
 
     Sorted input is a requirement rather than a convenience: the
     bootstrap sorts every resample anyway and would otherwise sort it a
@@ -1908,9 +1902,9 @@ def bootstrap_test(
     refusal below can be exercised against a fixed list.  Each is read
     at the two ``BOOTSTRAP_QUANTILES`` of ``BOOTSTRAP_RESAMPLES``
     resample statistics -- the same 95 % percentile interval the external
-    harness reports, and the level the note below names.  The
-    confidence level is fixed at 95 % there and here, so these intervals
-    are descriptive evidence and are deliberately NOT used for the
+    harness reports, and the level the note below names.  That level is
+    fixed there and here, so these intervals are descriptive evidence and
+    are deliberately NOT used for the
     corrected-alpha detection decision; that rests on the three p-value
     tests above.
 
@@ -1930,19 +1924,11 @@ def bootstrap_test(
     refusal names ``BOOTSTRAP_MAX_PAIRS``, because that is the constant
     to edit -- collecting more pairs cannot cure it.
 
-    A trim proportion this script cannot trim with declines the row
-    before any resampling, and the note names the constant it came from.
-    Below zero the estimator itself refuses (see
-    `trimmed_mean_sorted()`); at one half and above the estimator answers
-    with the median, which is a statistic but not the one the row is
-    labelled with, so the refusal has to live here.  Either way, saying
-    it here means the report names WHICH tunable put the row out of
-    action instead of leaving a reader to infer it from a row of dashes.
-
-    A trim that `is_trim_proportion()` refuses declines the row before
-    any resampling, and the note names the constant it came from and the
-    domain it left.  All three ways out of that domain are refused here
-    rather than left to the estimator, and each for a reason of its own:
+    A trim proportion `is_trim_proportion()` refuses declines the row
+    before any resampling, and the note names the constant it came from
+    and the domain it left.  All three ways out of that domain are
+    refused here rather than left to the estimator, each for a reason of
+    its own:
 
     * a value that is not finite would raise out of ``int()`` in the
       middle of a resample loop, taking the whole measurement with it;
@@ -2306,11 +2292,11 @@ def classified_widths(order, drops=CONTROLLED_BIT_DROPS, floor=MIN_NONCE_BITS):
       costs nothing and is not reported.
 
     Classifying instead of filtering is the whole point: a width the
-    configuration asked for and this curve cannot supply used to vanish
-    between `controlled_widths()` and the collection, so the report
-    listed CONTROLLED_BIT_DROPS in its parameters and then quietly
-    measured fewer buckets than it named, with nothing saying which one
-    went missing or why.
+    configuration asked for and this curve cannot supply would otherwise
+    vanish between `controlled_widths()` and the collection, leaving the
+    report to list CONTROLLED_BIT_DROPS in its parameters and then
+    quietly measure fewer buckets than it named, with nothing saying
+    which one went missing or why.
 
     *drops* and *floor* are parameters so the classification can be
     exercised against fixed inputs without retuning the module.
@@ -2731,14 +2717,12 @@ def matched_differences(
 
     Mode 2 cannot pair by index: the reference bucket holds roughly half
     of all observations while a narrow bucket holds a few hundred, so
-    observation *i* of the two was taken at quite different points in
-    the run and their difference carries however much the machine
-    drifted in between.  That is a confound big enough to manufacture a
-    significant result out of nothing.
-
-    Each test observation is therefore paired with a reference-bucket
-    observation taken within ``limits["gap"]`` positions of it, and the
-    pair is dropped when there is none.
+    observation *i* of the two was taken at quite different points in the
+    run and their difference carries however much the machine drifted in
+    between -- a confound big enough to manufacture a significant result
+    out of nothing.  Each test observation is therefore paired with a
+    reference-bucket observation taken within ``limits["gap"]`` positions
+    of it, and the pair is dropped when there is none.
 
     The position that bound is measured in is the signing attempt each
     observation came from, carried on the observation itself by
@@ -2747,39 +2731,29 @@ def matched_differences(
     an unconfirmed nonce leaves a hole, after which every later
     observation sits at a list position below the attempt it came from,
     and two observations a hundred attempts apart can end up sixteen
-    list positions apart.  Reading the bound off list positions would
-    therefore have let exactly the drift-carrying pairs through that the
-    bound exists to refuse.
+    list positions apart.  Reading the bound off list positions would let
+    exactly the drift-carrying pairs through that the bound refuses.
 
     The matching is ONE TO ONE: a reference observation serves exactly
-    one test observation and is then spent.  That restriction is what
-    makes the paired tests mean anything.  Letting a reference
-    observation serve several neighbours is pseudoreplication: it reports
-    more pairs than there were independent reference measurements, and
-    the paired tests divide by the square root of that inflated count, so
-    one slow reading reused by a dozen neighbours contributes the same
-    large positive difference a dozen times over.  The median does not
-    move, so nothing looks wrong in the table, while the t statistic
-    grows on replicated rather than on independent evidence.
+    one test observation and is then spent.  Letting one serve several
+    neighbours is pseudoreplication: it reports more pairs than there
+    were independent reference measurements, and the paired tests divide
+    by the square root of that inflated count, so one slow reading reused
+    by a dozen neighbours contributes the same large positive difference
+    a dozen times over.  The median does not move, so nothing looks wrong
+    in the table, while the t statistic grows on replicated rather than
+    on independent evidence.
 
-    The two devices answer two different confounds and both are needed.
-    Proximity matching keeps a pair's two readings close together in the
-    run, so their difference is not mostly machine drift; the one-to-one
+    Both devices are needed and they answer different confounds:
+    proximity keeps a pair's two readings close together in the run, so
+    their difference is not mostly machine drift, and the one-to-one
     restriction keeps the pair count equal to the number of independent
-    readings, so the divisor the paired tests use is the real one.
-    Either device on its own leaves a route to a p-value the data does
-    not support.
-
-    The restriction costs sensitivity: fewer pairs survive, so a real
-    dependence needs more observations before it is caught.  That is the
-    trade this instrument makes deliberately, because a probe that can
-    manufacture a detection cannot be trusted to report the absence of
-    one.
-
-    Pairs are taken greedily, earliest available reference first, which
-    is the choice that maximises how many pairs survive -- so the
-    restriction costs power only where the data genuinely cannot supply
-    independent pairs.
+    readings, so the divisor the paired tests use is the real one.  The
+    cost is sensitivity -- fewer pairs survive, so a real dependence
+    needs more observations before it is caught -- and that trade is
+    deliberate, because a probe that can manufacture a detection cannot
+    be trusted to report the absence of one.  Pairs are taken greedily,
+    earliest available reference first, which maximises how many survive.
     """
     references = []
     tests = []
@@ -3054,7 +3028,6 @@ SCAN_FORM = (
 
 
 def show(value, spec="%.2f"):
-    """Render one numeric table cell; anything missing becomes ``-``."""
     if value is None:
         return "-"
     if value != value:
@@ -3063,14 +3036,12 @@ def show(value, spec="%.2f"):
 
 
 def show_p(value):
-    """Render a p-value, or ``-`` when the test declined to run."""
     if value is None:
         return "-"
     return "%.2e" % (value,)
 
 
 def to_micros(values):
-    """Convert a list of seconds to a list of microseconds."""
     return [value * 1e6 for value in values]
 
 
@@ -3119,12 +3090,10 @@ def wrapped_lines(text, width, indent):
 
 
 def print_rule(character):
-    """A full-width horizontal rule."""
     print(character * RULE_WIDTH)
 
 
 def print_section(title):
-    """A section heading with an underline the width of the title."""
     print("")
     print(title)
     print("-" * len(title))
@@ -3241,12 +3210,14 @@ def print_parameters(threshold_note):
         ("REPEAT", REPEAT),
         ("CONTROLLED_PER_BUCKET", CONTROLLED_PER_BUCKET),
         ("MIN_OF", MIN_OF),
+        ("CLOCK_READS", CLOCK_READS),
         ("CONTROLLED_BIT_DROPS", CONTROLLED_BIT_DROPS),
         ("MIN_NONCE_BITS", MIN_NONCE_BITS),
         ("MIN_BUCKET_SAMPLES", MIN_BUCKET_SAMPLES),
         ("CONTROLLED_MIN_SAMPLES", CONTROLLED_MIN_SAMPLES),
         ("MAX_TESTED_BUCKETS", MAX_TESTED_BUCKETS),
         ("MAX_PAIR_GAP", MAX_PAIR_GAP),
+        ("MEDIAN_SE_FACTOR", MEDIAN_SE_FACTOR),
         ("SIGN_TEST_MIN_PAIRS", SIGN_TEST_MIN_PAIRS),
         ("EXACT_BINOM_MAX_N", EXACT_BINOM_MAX_N),
         ("BOOTSTRAP_RESAMPLES", BOOTSTRAP_RESAMPLES),
@@ -3271,7 +3242,6 @@ def print_parameters(threshold_note):
 
 
 def print_anchors():
-    """Observation counts published elsewhere, for scale."""
     print_section("calibration anchors (observations needed to detect)")
     for count, description in CALIBRATION_ANCHORS:
         print("  {0:>12}  {1}".format(with_commas(count), description))
@@ -3284,7 +3254,6 @@ def print_anchors():
 
 
 def print_trend(rows, reference_medians):
-    """The per-bucket table: the primary visual evidence."""
     print(
         TREND_FORM.format(
             bits="bits",
@@ -3477,7 +3446,6 @@ def print_interval_declines(entries):
 
 
 def print_battery(entries):
-    """p-values for every bucket compared against the reference."""
     print(
         BATTERY_FORM.format(
             bits="bits",
@@ -3511,7 +3479,6 @@ def print_battery(entries):
 
 
 def print_bootstrap(entries):
-    """95 % percentile intervals on the two trimmed-mean estimators."""
     print(
         BOOT_FORM.format(
             bits="bits",
@@ -3565,9 +3532,11 @@ def print_scan(detected_at, rows, total):
     """The headline: the earliest prefix at which anything still rejects.
 
     The rows are the prefixes of ``PREFIX_SIZES`` the battery was re-run
-    over, so the resolution of the answer is the spacing of that list:
-    it brackets the true threshold from above rather than pinning it,
-    the threshold lying between the rejecting prefix and the one before.
+    over, so the answer is a statement about those counts alone.  A
+    rejection at one prefix is not read as a rejection at every larger
+    one, nor a nonrejection as one at every smaller one, so nothing is
+    claimed about the counts between two entries of the list and no
+    threshold interval is inferred from the pair that straddles it.
 
     ``ref`` is the reference bucket that prefix chose and ``alpha`` the
     corrected significance level that prefix was judged at.  Both are
@@ -3619,21 +3588,21 @@ def print_scan(detected_at, rows, total):
     headline = scan_headline(detected_at, rows)
     if headline == "invalid":
         print(
-            "  smallest detectable N : unavailable -- a prefix carried a\n"
-            "  value that is not a finite number"
+            "  earliest rejecting prefix : unavailable -- a prefix\n"
+            "  carried a value that is not a finite number"
         )
         print(
-            "  no bound can be read from this run: an unusable number is\n"
-            "  neither a detection nor the absence of one"
+            "  nothing can be read from this run: an unusable number is\n"
+            "  neither a rejection nor the absence of one"
         )
         return
     if headline == "insufficient":
         print(
-            "  smallest detectable N : insufficient evidence -- no prefix\n"
-            "  produced a p-value that could be read"
+            "  earliest rejecting prefix : insufficient evidence -- no\n"
+            "  prefix produced a p-value that could be read"
         )
         print(
-            "  no bound can be read from this run: not one statistical\n"
+            "  nothing can be read from this run: not one statistical\n"
             "  comparison was carried out, so this is the absence of\n"
             "  evidence and NOT evidence of absence.  Collect more\n"
             "  observations, or lower MIN_BUCKET_SAMPLES, so that at\n"
@@ -3644,32 +3613,34 @@ def print_scan(detected_at, rows, total):
         tested = scan_tested_sizes(rows)
         bound = tested[-1]
         print(
-            "  smallest detectable N : not detected at N <= %s"
-            % (with_commas(bound),)
+            "  earliest rejecting prefix : none -- no rejection at the\n"
+            "  tested prefixes through N = %s" % (with_commas(bound),)
         )
         print(
-            "  the dependence is not resolved by this instrument at this\n"
-            "  sample count, which is not the same as its absence; raise\n"
-            "  REPEAT to push the bound further out"
+            "  the dependence is not resolved by this instrument at any\n"
+            "  prefix it tested, which is neither its absence nor a\n"
+            "  statement about the counts between them; raise REPEAT to\n"
+            "  test further out"
         )
         if len(tested) < len(rows):
             print(
                 "  %d of the %d prefixes above produced a p-value and the\n"
-                "  bound is read from those alone; the remaining %d tested\n"
-                "  nothing, so no sample count of theirs is bounded by it"
+                "  statement covers those alone; the remaining %d tested\n"
+                "  nothing, so no sample count of theirs is spoken for"
                 % (len(tested), len(rows), len(rows) - len(tested))
             )
         if bound != total:
             print(
-                "  %s observations were collected in all: the bound stops\n"
-                "  at the largest prefix a test actually ran over"
+                "  %s observations were collected in all: the statement\n"
+                "  stops at the largest prefix a test actually ran over"
                 % (with_commas(total),)
             )
         return
-    print("  smallest detectable N : %s" % (with_commas(headline),))
+    print("  earliest rejecting prefix : %s" % (with_commas(headline),))
     print(
-        "  a dependence on nonce bit length is already visible at\n"
-        "  that sample count"
+        "  a dependence on nonce bit length already rejects at that\n"
+        "  prefix; whether a smaller untested count would too is not\n"
+        "  established by this run"
     )
 
 
@@ -4009,10 +3980,10 @@ def scan_prefixes(observations, minimum, full_entries=None, limits=LIMITS):
 def scan_tested_sizes(rows):
     """Prefix sizes that actually produced a readable p-value.
 
-    A bound of the form "not detected at N <= x" is a claim about
-    prefixes a test was run over.  A prefix that produced no p-value at
-    all was not tested at any threshold, so it carries no such claim and
-    is left out of the set the bound is read from.
+    A statement of the form "no rejection at the tested prefixes through
+    N = x" covers the prefixes a test was run over.  A prefix that
+    produced no p-value at all was not tested at any threshold, so it
+    carries no such statement and is left out of the set x is read from.
     """
     sizes = []
     for row in rows:
@@ -4029,29 +4000,29 @@ def scan_has_evidence(rows):
     proximity bound, or no test willing to run.  Each of those leaves
     every ``min_p`` at ``None`` and every ``rejected`` at false, which
     reads exactly like a run that tested everything and found nothing --
-    and is the opposite.  Nothing was measured, so there is no bound to
+    and is the opposite.  Nothing was measured, so there is nothing to
     report, and this predicate is what keeps the two apart.
     """
     return len(scan_tested_sizes(rows)) > 0
 
 
 def scan_headline(detected_at, rows):
-    """The smallest-N cell of the machine readable block, and the state
-    `print_scan()` prints.
+    """The earliest-prefix cell of the machine readable block, and the
+    state `print_scan()` prints.
 
     One of four:
 
     * ``invalid`` -- a prefix carried a number that could not be read.
-      Not a detection and not the absence of one.
+      Not a rejection and not the absence of one.
     * ``insufficient`` -- no prefix produced a p-value at all, so
-      nothing was measured.  Also not the absence of a detection: an
-      untested prefix cannot bound anything, and reporting one as
-      "not detected" would manufacture a reassuring headline out of
-      zero evidence.
+      nothing was measured.  Also not the absence of a rejection: an
+      untested prefix supports no statement, and reporting one as a
+      nonrejection would manufacture a reassuring headline out of zero
+      evidence.
     * ``none`` -- a battery ran and its readable p-values did not reject
-      at the corrected alpha.  This one IS a result: the bound belongs to
-      the prefixes named by `scan_tested_sizes()`.
-    * the prefix size itself -- the smallest sample count at which
+      at the corrected alpha.  This one IS a result, and it covers the
+      prefixes named by `scan_tested_sizes()` and no others.
+    * the prefix size itself -- the earliest configured prefix at which
       something rejected.
 
     The report and this cell are the same decision so that they cannot
@@ -4071,9 +4042,9 @@ def scan_headline(detected_at, rows):
 def scan_verdict(row):
     """The per-prefix cell of the printed scan table.
 
-    ``no data`` is the state F-03 of the review found missing: it was
-    printed as ``-``, which the column legend reads as "nothing rejected
-    here", when in fact nothing was tested here.
+    ``no data`` is a cell of its own rather than a ``-``, because the
+    column legend reads a ``-`` as "nothing rejected here" and a prefix
+    that produced no p-value had nothing tested here at all.
     """
     if not row["valid"]:
         return "invalid"
@@ -4106,7 +4077,6 @@ def scan_outcome(row):
 
 
 def record(*fields):
-    """Append one comma separated record to the machine readable block."""
     CSV_ROWS.append(",".join([str(field) for field in fields]))
 
 
@@ -4121,7 +4091,6 @@ def csv_safe(text):
 
 
 def record_trend(mode, curve_name, rows):
-    """Mirror a per-bucket table."""
     for row in rows:
         record(
             "bucket",
@@ -4138,7 +4107,6 @@ def record_trend(mode, curve_name, rows):
 
 
 def record_battery(mode, curve_name, entries):
-    """Mirror a p-value table and its bootstrap intervals."""
     for bits, result in entries:
         record(
             "test",
@@ -4165,7 +4133,6 @@ def record_battery(mode, curve_name, entries):
 
 
 def record_monotone(mode, curve_name, summary):
-    """Mirror a monotone-trend line."""
     record(
         "trend",
         mode,
@@ -4179,7 +4146,6 @@ def record_monotone(mode, curve_name, summary):
 
 
 def print_csv_block():
-    """Print the machine readable block, with a legend for each record."""
     print_section("machine readable summary")
     print(
         "  every line below starts with CSV so it can be extracted with\n"
@@ -4212,8 +4178,8 @@ def print_csv_block():
     )
     print(
         "  a scan record whose last field is invalid, and a detect record\n"
-        "  whose smallest_n is invalid, are not a detection and not the\n"
-        "  absence of one: either a value that is not a finite number\n"
+        "  whose earliest_prefix is invalid, are not a rejection and not\n"
+        "  the absence of one: either a value that is not a finite number\n"
         "  reached a comparison, or a recovered nonce failed to confirm\n"
         "  and the bucketing itself cannot be trusted"
     )
@@ -4225,7 +4191,7 @@ def print_csv_block():
         "  nothing was found absent.  none, in a detect record, is the\n"
         "  one that IS a result -- a battery ran and did not reject"
     )
-    print("  CSV,detect,curve,smallest_n,threshold,comparisons,total")
+    print("  CSV,detect,curve,earliest_prefix,threshold,comparisons,total")
     print("  CSV,collect,curve,attempted,dropped,recovery_failures")
     print("  CSV,status,scope,description")
     print("  CSV,verdict,state,exit_status,problems")
@@ -4237,7 +4203,7 @@ def print_csv_block():
         "  anything; unavailable means they are not, and then one status\n"
         "  record names each reason.  A detection does NOT make a run\n"
         "  unavailable -- gate automation on this record, not on whether\n"
-        "  a smallest_n was found"
+        "  an earliest rejecting prefix was found"
     )
     print("")
     for row in CSV_ROWS:
@@ -4289,7 +4255,6 @@ def curve_dispatch(name):
 
 
 def skipped_curve_line(state):
-    """What the report prints for a curve it cannot measure."""
     if state == CURVE_UNKNOWN:
         return "skipped: no curve is registered under that name"
     if state == CURVE_EDWARDS:
@@ -4301,7 +4266,6 @@ def skipped_curve_line(state):
 
 
 def skipped_curve_note(state):
-    """Why a skipped curve produced no evidence, for the validity list."""
     if state == CURVE_UNKNOWN:
         return (
             "no curve is registered under that name, so none of the "
@@ -4363,8 +4327,8 @@ def note_skipped_curve(name, state):
     One problem and one evidence record per mode, and one machine
     readable row, so the validity tally, the problem list, the CSV block
     and the exit status all see the same skip.  This is the whole of the
-    accounting a skipped curve needs, in one call, because the two paths
-    that reach it used to do only part of it.
+    accounting a skipped curve needs, in one call, so that neither of the
+    two paths reaching it can do only part of it.
     """
     for scope, description in skipped_curve_problems(name, state):
         note_problem(scope, description)
@@ -4533,7 +4497,6 @@ def report_mode(
 
 
 def probe_curve(curve, index):
-    """Run both modes against *curve* and print the whole report."""
     print_section(
         "%s -- order %d bits, digest %d bytes"
         % (curve.name, bit_length(curve.order), curve.baselen)
@@ -4693,7 +4656,7 @@ def probe_curve(curve, index):
         # every observation is bucketed by the bit length of a nonce this
         # probe believes it recovered; one that could not be confirmed
         # means that belief is wrong somewhere, and there is no way to
-        # know where.  A trend, a p-value or a smallest-N read off
+        # know where.  A trend, a p-value or an earliest prefix read off
         # buckets that may hold observations at the wrong width is worse
         # than no number at all, because it looks exactly like one that
         # can be trusted.  So mode 2 stops here rather than continuing
@@ -4934,7 +4897,6 @@ def print_validity():
 
 
 def print_closing(elapsed):
-    """Total cost of the run, and what the numbers do and do not mean."""
     print_section("summary")
     print("  total elapsed: %.1f s" % (elapsed,))
     print("")
@@ -4943,7 +4905,7 @@ def print_closing(elapsed):
         "  revisions of the arithmetic layer and the difference between\n"
         "  the two reports -- the flattening of the per-bucket medians,\n"
         "  the collapse of rho and of the span, the growth of the\n"
-        "  smallest detectable N -- is measured evidence about the\n"
+        "  earliest rejecting prefix -- is measured evidence about the\n"
         "  nonce bit-length dependence of the signing path."
     )
     print("")
@@ -4961,11 +4923,13 @@ def print_closing(elapsed):
     print("")
     print(
         "  What it does not support: any claim that the dependence is\n"
-        "  gone.  Absence of detection at some N is a bound set by this\n"
-        "  instrument and this machine, not a property of the code, and\n"
-        "  a residual per-operation signal remains in pure Python\n"
-        "  regardless: CPython integers are variable width and the\n"
-        "  field arithmetic defers some reductions on purpose.  Nothing\n"
+        "  gone.  No rejection at the prefixes this run tested is an\n"
+        "  observation about this instrument and this machine, not a\n"
+        "  property of the code, and it says nothing about the sample\n"
+        "  counts between two of those prefixes.  A residual\n"
+        "  per-operation signal remains in pure Python regardless:\n"
+        "  CPython integers are variable width and the field arithmetic\n"
+        "  defers some reductions on purpose.  Nothing\n"
         "  above is a claim of constant-time execution.  The reference\n"
         "  point worth remembering is the third calibration anchor --\n"
         "  hardened compiled C still leaked about 34 ns, and it took\n"
@@ -5049,8 +5013,8 @@ CHECK_FLOOR = 8
 # length calls that width supplyable, while the largest nonce below the
 # order -- ``2**255 - 1`` -- is a bit NARROWER than the order's width.
 # No registered curve is this shape, which is exactly why it belongs in a
-# fixture: it is the only way to exercise the refusal, and the self check
-# used to state the wrong answer for it.
+# fixture: it is the only way to exercise the refusal, and the answer is
+# easy to state wrongly.
 CHECK_POWER_ORDER = 1 << (CHECK_ORDER_BITS - 1)
 
 # One curve name of each kind the driver can be given: one this probe can
@@ -5250,7 +5214,7 @@ CHECK_FLAT_DIFFERENCE = 100.0
 # ``LIMITS`` bundle; only the fixtures are held still.
 #
 # The values equal the shipped defaults, so a default run's self check
-# makes exactly the comparisons it made before this separation.  The
+# makes exactly the comparisons a run under the live constants would.  The
 # ladder is the single first rung: everything past it is a claim about
 # sample counts these datasets do not reach.
 CHECK_GAP = 16
@@ -5437,7 +5401,6 @@ def check_round_matched():
 
 
 def check_tested(entries):
-    """How many of *entries* carry a battery that actually ran."""
     total = 0
     for _, result in entries:
         if result["tested"]:
@@ -5460,14 +5423,12 @@ def check_sizes(rows):
 
 
 def check_last(rows, name):
-    """Field *name* of the last scan row, or ``None`` when there are none."""
     if not rows:
         return None
     return rows[-1][name]
 
 
 def check_reasons(classified):
-    """Just the reasons of a `classified_widths()` answer, in order."""
     reasons = []
     for _, reason in classified:
         reasons.append(reason)
@@ -5475,7 +5436,6 @@ def check_reasons(classified):
 
 
 def check_refused_bits(order, drops, floor):
-    """Just the bit widths `refused_widths()` names, in order."""
     named = []
     for bits, _ in refused_widths(order, drops, floor):
         named.append(bits)
@@ -5595,7 +5555,6 @@ def check_reason_of(entries, bits):
 
 
 def check_spoken(rows):
-    """The spoken test names of a `declined_tests()` answer, in order."""
     spoken = []
     for name, _, _ in rows:
         spoken.append(name)
@@ -5603,7 +5562,6 @@ def check_spoken(rows):
 
 
 def check_note_for(rows, spoken):
-    """The note a `declined_tests()` answer carries for one test name."""
     for name, note, _ in rows:
         if name == spoken:
             return note
@@ -5802,7 +5760,6 @@ def check_interval_shape(result):
 
 
 def check_interval_bounds(result):
-    """``(low, high, excludes_zero)`` per interval of a bootstrap answer."""
     bounds = []
     for interval in result["intervals"]:
         bounds.append(
@@ -5839,7 +5796,6 @@ def check_running_note():
 
 
 def check_bad_trim_note(proportion):
-    """The note a trim outside the allowed domain earns."""
     return (
         "TRIM_PROPORTIONS holds %r, which is not a finite proportion "
         "below 0.5" % (proportion,)
@@ -5902,10 +5858,10 @@ def check_scan(observations, full_entries=None):
 
     Every self-check scan goes through here, so that not one of them
     reads the live prefix ladder, proximity bound, bucket cap or alpha.
-    An empty ``PREFIX_SIZES`` used to raise ``IndexError`` out of a
-    fixture that indexed it directly; a retuned ladder, gap, cap or
-    alpha used to move dozens of these checks off their expected values.
-    Neither can happen through this door.
+    A fixture that indexed the live ladder directly would raise
+    ``IndexError`` on an empty ``PREFIX_SIZES``, and a retuned ladder,
+    gap, cap or alpha would move dozens of these checks off their
+    expected values.  Neither can happen through this door.
     """
     return scan_prefixes(
         observations, CHECK_MINIMUM, full_entries, CHECK_LIMITS
@@ -5915,12 +5871,12 @@ def check_scan(observations, full_entries=None):
 def self_check_without_evidence(results):
     """Scans that produced no p-value at all must report insufficient.
 
-    Four ways to get there, all of which used to be reported as
-    "not detected at N <= ..." with a recorded outcome of ``no``: no
-    observation whatsoever, one populated bucket with nothing to compare
-    against it, a comparison bucket below the testable floor, and a
-    comparison bucket above the floor whose observations are all too far
-    from the reference bucket's to be paired.
+    Four ways to get there, none of which may be reported as "no
+    rejection at the tested prefixes" with a recorded outcome of ``no``:
+    no observation whatsoever, one populated bucket with nothing to
+    compare against it, a comparison bucket below the testable floor, and
+    a comparison bucket above the floor whose observations are all too
+    far from the reference bucket's to be paired.
     """
 
     # the properties the datasets below rely on, checked rather than
@@ -6094,23 +6050,22 @@ def self_check_with_evidence(results):
 
 
 def self_check_prefix_ladder(results):
-    """A bound may only be read from the prefixes a test ran over.
+    """A statement may only be read from the prefixes a test ran over.
 
     Two ladders where some prefix produced evidence and some did not.
-    The first gains its comparison late, so the bound is the whole
-    sample and the earlier prefix is merely excluded from it.  The second
-    loses it late -- a wider bucket appears too far from everything
-    already collected to pair with any of it, and becomes the reference
-    -- so the bound stops short of the observation count, which is the
-    case that would otherwise print a nondetection over a prefix in
-    which nothing was compared.
+    The first gains its comparison late, so the statement covers the
+    whole sample and the earlier prefix is merely excluded from it.  The
+    second loses it late -- a wider bucket appears too far from
+    everything already collected to pair with any of it, and becomes the
+    reference -- so the statement stops short of the observation count,
+    which is the case that would otherwise report a nonrejection over a
+    prefix in which nothing was compared.
 
-    Both datasets are sized around ``CHECK_PREFIX_FIRST``, the ladder
-    the checks run under, rather than around whatever the live
-    ``PREFIX_SIZES`` begins with.  Indexing the live list here meant an
-    empty ladder -- a legitimate edit, since the scan tests the full
-    sample regardless -- raised ``IndexError`` out of the self check
-    instead of running it.
+    Both datasets are sized around ``CHECK_PREFIX_FIRST``, the ladder the
+    checks run under, rather than around whatever the live
+    ``PREFIX_SIZES`` begins with: indexing the live list would raise
+    ``IndexError`` out of the self check on an empty ladder, which is a
+    legitimate edit since the scan tests the full sample regardless.
     """
     first = CHECK_PREFIX_FIRST
 
@@ -6472,11 +6427,10 @@ def self_check_report_status(results):
     the table below: a run in which nothing went WRONG -- no refused
     signature, no unconfirmed nonce, no missing curve, so nothing to
     record as a problem -- and in which a mode nevertheless carried out
-    no comparison at all, because every bucket it had sat below the
-    testable floor.  Reading the status off the problem list alone
-    reported that run as evidence, and the validity section said in
-    words that a comparison had been produced.  Both now come from the
-    registry instead, and both are pinned here.
+    no comparison at all, every bucket it had sitting below the testable
+    floor.  Reading the status off the problem list alone would report
+    that run as evidence and have the validity section say in words that
+    a comparison was produced; both come from the registry instead.
 
     Written against synthetic registries rather than by staging a
     measurement: the decision is a pure function of two lists, and the
@@ -6710,19 +6664,18 @@ def self_check_curve_dispatch(results):
     """A curve the run asked for and never measured, still accounted for.
 
     The checks above pin the decision against hand-built registries; this
-    pins the registry a real run would BUILD, which is the half that was
-    wrong.  Two of the three kinds of curve name a driver can be given
-    never reach a measurement -- one is not registered at all, one is an
-    Edwards curve and ``sign_digest()`` rejects those -- and both used to
-    record a problem and move on without registering either of their
-    modes as unproduced.  No verdict was affected, since a recorded
-    problem withholds the status on its own, but the validity section's
-    denominator counted only the curves that got as far as being
-    measured: a run asked for three curves could report "2 of the 2
-    comparisons this run was asked for" when it had been asked for six.
+    pins the registry a real run would BUILD.  Two of the three kinds of
+    curve name a driver can be given never reach a measurement -- one is
+    not registered at all, one is an Edwards curve and ``sign_digest()``
+    rejects those -- and each has to register both of its modes as
+    unproduced.  A recorded problem withholds the status on its own, so
+    no verdict turns on this; the validity section's denominator does,
+    and counting only the curves that got as far as being measured would
+    let a run asked for three curves report "2 of the 2 comparisons this
+    run was asked for".
 
     Assembled from the real `curve_dispatch()` over real registered
-    names, and evaluated against LOCAL lists.  Nothing here appends to
+    names and evaluated against LOCAL lists.  Nothing here appends to
     ``PROBLEMS``, ``EVIDENCE`` or ``CSV_ROWS``, and the last check says
     so, because a self check that recorded evidence of its own would move
     the very tally it exists to pin.
@@ -6851,14 +6804,13 @@ def self_check_curve_dispatch(results):
         ("detect", CHECK_EDWARDS_CURVE, "insufficient", "-", "-", 0),
     )
 
-    # and the WIRING, which is where the fault was: everything above is
-    # pure, and a `note_skipped_curve()` that computed all of it and then
-    # registered none of it would satisfy every check so far -- that is
-    # precisely what the driver used to do.  So it is called for real
-    # here, what it appended to each of the three registries is read
-    # back, and the registries are then returned to the state they were
-    # in.  The restoration is asserted rather than assumed, two checks
-    # down.
+    # and the WIRING, which the checks above cannot reach: everything
+    # there is pure, and a `note_skipped_curve()` that computed all of it
+    # and then registered none of it would satisfy every one of them.  So
+    # it is called for real here, what it appended to each of the three
+    # registries is read back, and the registries are then returned to
+    # the state they were in.  The restoration is asserted rather than
+    # assumed, two checks down.
     problems_before = len(PROBLEMS)
     evidence_before = len(EVIDENCE)
     rows_before = len(CSV_ROWS)
@@ -6904,15 +6856,15 @@ def self_check_numeric_helpers(results):
     """The statistics themselves, against values computed independently.
 
     Everything above checks how a verdict is DECIDED; this checks the
-    numbers it is decided from.  They had no coverage anywhere: the
+    numbers it is decided from.  Nothing else covers them -- the
     package's unit suite cannot import this module without starting a
-    timing run, so a wrong quantile, a wrong tail probability or a
-    silently mis-trimmed mean would have reached the report and been
-    read as a measurement.
+    timing run -- so a wrong quantile, a wrong tail probability or a
+    silently mis-trimmed mean would reach the report and read as a
+    measurement.
 
     Every expectation is either exact arithmetic (a median of four
     values, a rank with one tie, a binomial tail over 2**10) or a value
-    obtained from an independent route -- ``math.erfc`` for the normal
+    obtained from an independent route: ``math.erfc`` for the normal
     tail, the Cauchy closed form for Student's t at one degree of
     freedom, exact ``Fraction`` summation for the binomial tail the beta
     form replaces.  None of it is this script's own output recorded as an
@@ -6961,12 +6913,12 @@ def self_check_numeric_helpers(results):
         1e-12,
     )
 
-    # trimmed means, including the proportion that used to return the
+    # trimmed means, including the proportion that would return the
     # sample's upper tail as if it were a central estimate: at ten
-    # observations a proportion of -0.1 made the cut -1 and the slice
-    # ordered[-1:11], so the function answered 10.0 -- the LARGEST
-    # observation -- and the bootstrap built an interval around it and
-    # marked it as excluding zero
+    # observations a proportion of -0.1 makes the cut -1 and the slice
+    # ordered[-1:11], so an unguarded function answers 10.0 -- the
+    # LARGEST observation -- and the bootstrap builds an interval around
+    # it and marks it as excluding zero
     ten = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
     skewed = [1.0, 2.0, 3.0, 4.0, 100.0]
     check(
@@ -7050,9 +7002,9 @@ def self_check_numeric_helpers(results):
         False,
     )
     # and nothing in the range raises: ``int(count * nan)`` raises
-    # ValueError and ``int(count * inf)`` raises OverflowError, which
-    # used to come out of the middle of a resampling as a traceback
-    # instead of as a declined interval
+    # ValueError and ``int(count * inf)`` raises OverflowError, either of
+    # which would otherwise leave the middle of a resampling as a
+    # traceback instead of a declined interval
     for bad_trim in [float("nan"), float("inf"), float("-inf"), None]:
         check(
             results,
@@ -7696,11 +7648,11 @@ def self_check_limits_and_settings(results):
 def self_check_measurement_settings(results):
     """The settings a COLLECTION or an ESTIMATOR could not be made under.
 
-    The companion to the verdict table checked above, and the answer to a
-    review finding that named the gap precisely: only four constants were
-    validated, so every other tunable could be edited to a value that
-    produced no evidence, or invalid evidence, while the report went on
-    reading as though a measurement had been made.  A trim at one half or
+    The companion to the verdict table checked above.  Validating only
+    the four constants the analysis is passed would leave every other
+    tunable editable to a value that produces no evidence, or invalid
+    evidence, while the report goes on reading as though a measurement
+    had been made.  A trim at one half or
     beyond was reported as a trimmed mean it is not; a cap below the
     bootstrap's floor got an interval resampled from fewer pairs than the
     floor forbids, because the floor was applied before the cap; no
@@ -7826,10 +7778,10 @@ def self_check_measurement_settings(results):
             1,
         )
 
-    # the bootstrap's own two refusals.  The cap is the one the review
-    # found: the floor used to be applied to the pairs AVAILABLE only, so
-    # a cap below it reported an interval over fewer pairs than the floor
-    # forbids
+    # the bootstrap's own two refusals.  The cap matters because applying
+    # the floor to the pairs AVAILABLE rather than to the pairs KEPT lets
+    # a cap below the floor report an interval over fewer pairs than the
+    # floor forbids
     pairs = check_boot_pairs()
     capped = bootstrap_test(
         pairs, random.Random(CHECK_SEED), [CHECK_WIDEST_TRIM], MIN_OF
@@ -7930,25 +7882,24 @@ def self_check_width_classification(results):
     """A width the configuration asked for and a curve cannot supply.
 
     ``CONTROLLED_BIT_DROPS`` is printed in the parameters as the set of
-    buckets a Mode 1 run will time, but a drop can name a width that has
-    no valid nonce -- wider than the generator's order -- or one narrower
-    than the probe will time at all.  Those used to be filtered out
-    between the parameters and the collection, so the report named more
-    buckets than it measured and said nothing about which went missing or
-    why.  A reader comparing the parameters against the per-bucket table
-    would have found a bucket simply absent.
+    buckets a Mode 1 run will time, but a drop can name a width with no
+    valid nonce -- wider than the generator's order -- or one narrower
+    than the probe times at all.  Filtering those out silently would let
+    the report name more buckets than it measured and leave a reader
+    comparing the parameters against the per-bucket table to find a
+    bucket simply absent, so each one is classified and its reason
+    printed.
 
     Classified against a fixed order and a fixed drop list, so the
     decision and its wording are pinned rather than sampled from whatever
-    the constants happen to hold.  Two orders are used, and the second is
-    the point: an order that is an exact power of two cannot supply a
-    nonce of its OWN bit width, so a classifier reading supplyability off
-    a bit length passes that width to the collection and the collection
-    drops the bucket on the ``None`` the draw returns.  The refusal is
-    checked against ``CHECK_POWER_ORDER``, and the classification of both
-    orders is then checked against `nonce_of_bit_length()` itself -- for
-    every width of both, and for every width of every registered curve --
-    so the oracle is a draw rather than a restatement of the classifier.
+    the constants hold.  The second order is the point: one that is an
+    exact power of two cannot supply a nonce of its OWN bit width, so a
+    classifier reading supplyability off a bit length would pass that
+    width on and the collection would drop the bucket on the ``None`` the
+    draw returns.  Both orders are then checked against
+    `nonce_of_bit_length()` itself -- every width of both, and every
+    width of every registered curve -- so the oracle is a draw rather
+    than a restatement of the classifier.
     """
     check(
         results,
@@ -8410,32 +8361,28 @@ def self_check_decline_reasons(results):
 def self_check_bootstrap_intervals(results):
     """The resampling that RAN, and every trim it may not run under.
 
-    `bootstrap_test()` was the one test of the four whose success path no
-    check here reached.  Every other synthetic dataset in this section
-    holds fewer rows than ``BOOTSTRAP_MIN_SAMPLES``, so every one of them
-    left through the insufficient-sample branch before a single resample
-    was drawn: no quantile, no trimmed mean, no endpoint, no ``used``, no
-    ``excludes_zero``.  The interval column of the report -- the column a
-    reader takes as evidence that a difference is real -- was therefore
-    printed by code that nothing in the run had exercised, and the check
-    that a valid trim is not refused passed for the wrong reason, the row
-    it fed having been refused for its SIZE before any trim was read.
+    Every other synthetic dataset in this section holds fewer rows than
+    ``BOOTSTRAP_MIN_SAMPLES`` and leaves through the insufficient-sample
+    branch before a resample is drawn, which would leave the interval
+    column -- the one a reader takes as evidence that a difference is
+    real -- printed by unexercised code, and would let the check that a
+    valid trim is not refused pass for the wrong reason, its row having
+    been refused for SIZE before any trim was read.
 
-    So the sample here is one row past that floor, and the endpoints are
+    So the sample here is one row past that floor and the endpoints are
     asserted to the exact float.  Exactness is affordable because the
-    samples are flat: with no spread, every resample is the same multiset
+    samples are flat: with no spread every resample is the same multiset
     and every trimmed mean of it is the sample's own difference, so the
-    answer does not depend on what the resampler drew -- and therefore
-    does not depend on which interpreter generation drew it.  The varied
-    sample carries the claims a flat one cannot make: that two runs of
-    one seed agree exactly, and that an interval stays inside the sample
-    it came from.
+    answer depends neither on what the resampler drew nor on which
+    interpreter generation drew it.  The varied sample carries the claims
+    a flat one cannot: that two runs of one seed agree exactly, and that
+    an interval stays inside the sample it came from.
 
-    The refusals are checked over a sample that is big enough to be
-    resampled, which is the only way to see that the trim was what
-    stopped the row.  All three ways out of the domain are covered, and
-    the reason the domain stops BELOW one half is pinned as well: at one
-    half the estimator answers, and answers with a different estimator.
+    The refusals are checked over a sample big enough to be resampled,
+    the only way to see that the trim was what stopped the row.  All
+    three ways out of the domain are covered, and so is the reason the
+    domain stops BELOW one half: at one half the estimator answers, and
+    answers with a different estimator.
     """
     flat = check_flat_differences(CHECK_BOOTSTRAP_PAIRS, CHECK_FLAT_DIFFERENCE)
     ran = bootstrap_test(flat, random.Random(CHECK_SEED), CHECK_TRIMS)
@@ -8707,19 +8654,18 @@ def self_check_unmeasured_clock(results):
 
     ``measure_clock_resolution()`` answers ``nan`` when no two of its
     readings differed, which a coarse timer can produce however many
-    readings it is given.  That reached the environment block through a
-    ``%.2e`` conversion and printed as ``nan``, in a row a reader
-    consults precisely to judge whether the differences further down are
-    larger than the timer can resolve.  ``nan`` is not an answer to that
-    question, and it is not obviously a non-answer either.
+    readings it is given.  Rendered through a ``%.2e`` conversion that
+    would print as ``nan`` in the very row a reader consults to judge
+    whether the differences further down are larger than the timer can
+    resolve -- neither an answer to that question nor obviously a
+    non-answer.
 
-    A run now refuses a ``CLOCK_READS`` below one before it reads the
-    clock, so that is no longer a way to reach the state -- but the two
-    helpers stay total and are checked at zero anyway, because the
-    environment block is printed BEFORE that refusal and has to render
-    whatever the constant holds.  The third state below is the refusal
-    itself: no reading was taken at all, which is neither a granularity
-    nor a granularity that was looked for and not found.
+    A run refuses a ``CLOCK_READS`` below one before it reads the clock,
+    but the two helpers stay total and are checked at zero anyway,
+    because the environment block is printed BEFORE that refusal and has
+    to render whatever the constant holds.  The third state below is the
+    refusal itself: no reading taken at all, which is neither a
+    granularity nor a granularity looked for and not found.
     """
     check(
         results,
@@ -8770,9 +8716,9 @@ def self_check_unmeasured_clock(results):
         "not measured (no non-zero gap in many reads)",
     )
     # the other two values the parameter block has to render before a
-    # refusal can name them.  Both used to raise from inside the block --
-    # a percent conversion and a join -- which put a traceback where the
-    # name of the constant to put back belonged
+    # refusal can name them.  Both are rendered by code that can raise --
+    # a percent conversion and a join -- and a traceback from there lands
+    # where the name of the constant to put back belongs
     check(
         results,
         "a level that is a number is printed as one",

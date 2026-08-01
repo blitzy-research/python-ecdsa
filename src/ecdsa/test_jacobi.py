@@ -1333,12 +1333,6 @@ class TestJacobi(unittest.TestCase):
             self.assertEqual(counted.counts(), table_less)
 
     def test_what_the_edge_multipliers_answer(self):
-        # The results themselves.  A multiplier of one still gives back this
-        # very object, as it did before the ladder was made to do a fixed
-        # amount of work; that answer is picked out after the work, so it costs
-        # what every other multiplier costs.  A multiplier of one *more* than
-        # the order gives an equal but distinct point, which is also what it
-        # gave before.
         order = int(generator_112r2.order())
         point = self.fresh_generator(generator_112r2)
         point._maybe_precompute()
@@ -1390,12 +1384,11 @@ class TestJacobi(unittest.TestCase):
         # A point that carries no order cannot have its multiplier brought to
         # a canonical width, so it keeps the ladder whose length -- and with
         # it its number of point operations -- follows the multiplier.  That
-        # ladder is not side channel hardened, and a caller who constructs
-        # such a point and multiplies it gets it as it is; what holds is the
-        # narrower claim that no route through the registered curves and the
-        # signing, key generation and ECDH paths of this library multiplies
-        # such a point by a secret, since the curves this module ships all
-        # state their order.
+        # ladder is not side channel hardened.  Signing, key generation and
+        # EdDSA multiply ordered generators and never reach it; ECDH reaches
+        # it whenever the remote public point was decoded from an encoding,
+        # which carries no order, and that decoded-key exchange is the
+        # orderless exception the countermeasure does not cover.
         point = PointJacobi(
             curve_112r2, generator_112r2.x(), generator_112r2.y(), 1
         )
@@ -1805,12 +1798,12 @@ class TestFixedLengthRecoding(unittest.TestCase):
             )
             # the sequence is in canonical form: no leading zero digit, and
             # no two adjacent non-zero ones.  Its length, and the number of
-            # non-zero digits in it, both follow the multiplier, which is why
-            # the paths still driven by it are the ones no route through the
-            # registered curves and the high level entry points of this library
-            # reaches with a secret: `mul_add()`, whose multipliers are derived
-            # from a signature, and a point with no usable order, which those
-            # paths never multiply by a private key or a nonce
+            # non-zero digits in it, both follow the multiplier, which the
+            # paths still driven by it inherit: `mul_add()`, whose multipliers
+            # come from a signature and are public, and a point with no usable
+            # order.  Ordered generators -- signing, key generation, EdDSA --
+            # never reach it; ECDH against a decoded remote point does, and
+            # that is the documented orderless exception
             if multiplier:
                 self.assertNotEqual(digits[-1], 0)
                 for position in range(len(digits) - 1):

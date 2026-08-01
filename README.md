@@ -264,11 +264,13 @@ interoperability testing and as a teaching tool.
 **This library does not protect against side-channel attacks in general, and
 makes no constant-time guarantee for any operation.** One reported timing side
 channel has been narrowed, and only that one: the number of elliptic curve
-point operations that signing, key generation and EdDSA signing perform no
-longer follows the secret they are performed with, and the same holds of an
-ECDH exchange where the remote point carries an order. What that does and does
-not cover is set out below, and at greater length in [`SECURITY.md`][4]; read
-it before relying on it.
+point operations that signing, key generation and EdDSA signing schedule is now
+fixed by the public order of the curve rather than by the secret they are
+performed with, and the same holds of an ECDH exchange where the remote point
+carries an order. One rare exception survives on the Edwards curves, where at
+most two multipliers per order cost a single doubling beyond that schedule.
+What the change does and does not cover is summarised below and set out in full
+in [`SECURITY.md`][4]; read that before relying on any of it.
 
 Do not allow attackers to measure how long it takes you to generate a key pair
 or sign a message. Do not allow attackers to run code on the same physical
@@ -279,190 +281,97 @@ attackers to measure RF interference coming from your computer while generating
 a key pair or signing a message. Note: just loading the private key will cause
 key pair generation. Other operations or attack vectors may also be
 vulnerable to attacks. Against the power analysis, RF and same-machine attacks
-in that list this library implements no countermeasure whatsoever, and **for a
-sophisticated attacker observing just one operation with a private key over one
-of those channels will be sufficient to completely reconstruct the private
-key**.
+in that list this library implements no countermeasure whatsoever. **Some local
+physical or microarchitectural attacks may recover key material from very few
+observations; this library provides no protection against them.**
 
 ### Nonce bit-length hardening (CVE-2024-23342)
 
 [CVE-2024-23342][5], published as [GHSA-wj6h-64fc-37mp][6] and as
 PYSEC-2026-1325, reports a [Minerva][7] class timing attack against this
-library. The time `SigningKey.sign_digest()` took followed the bit length of
-the per-signature nonce, so an attacker able to ask for enough timed
-signatures under one key learned a few bits of every nonce and reassembled
-those partial leaks into the long-term private key by lattice reduction. Key
-generation and ECDH key agreement multiply by the private key over the same
-code and were affected the same way, EdDSA signing multiplies by a per
-signature value of its own, and all of them are covered below. Signature
-verification, whose multipliers are public as soon as the signature is, was
-never affected by this attack and has deliberately been left alone: its
-combined multiplication is unchanged statement for statement, as are the
-addition and doubling formulas beneath it. It has always split into two
-separate multiplications when both of its points carry a precomputation
-table, though, so verification with a key that `precompute()` has been called
-on does now take the hardened ladder -- reaching the same point from the same
-public multipliers, and measurably faster. Verification without a precomputed
-key is untouched and unchanged in speed.
+library: the time `SigningKey.sign_digest()` took followed the bit length of
+the per-signature nonce, so an attacker able to ask for enough timed signatures
+under one key learned a few bits of every nonce and reassembled those partial
+leaks into the long-term private key by lattice reduction. Key generation and
+ECDH key agreement multiply by the private key over the same code and were
+affected the same way, and EdDSA signing multiplies by a per signature value of
+its own. Signature verification, whose multipliers are public as soon as the
+signature is, was never affected and has deliberately been left alone.
 
 **What is now hidden** is the number of elliptic curve point operations. Where
 a point knows an order the recoding can use -- which is every curve this
-library registers -- the multiplier is reduced to the one odd representative of
-it that lies between that order and three times it, and recoded into a fixed
-length sequence of digits none of which is zero, so how many point additions
-and point doublings a multiplication performs are derived from that (public)
-order and from nothing else. That the representative is never smaller than the
-order matters on its own: a Python integer costs what its width costs, so a
-normalisation that left a short nonce short would have kept the bit length of
-the nonce in the cost of recoding it and of every shift the ladder performs,
-even with the number of operations already fixed. The width of that
-representative is not itself a constant and is not claimed to be one: it runs
-from the bit length of the order to the bit length of three times the order
-less two, so up to two bits above the order, and the narrowest of those widths
-occurs only where the residue of the multiplier is even. On every curve this
-library registers that whole band falls inside one CPython integer size -- a
-256-bit order gives representatives of 256 to 258 bits, every one of which
-CPython holds in nine of its 30-bit internal digits -- so the width that
-remains does not change how many limbs the arithmetic works over. That is a
-measured property of the orders this library registers, not a promise about an
-order a caller brings of their own.
+library registers -- the multiplier is normalised to an odd representative
+between that order and three times it, and recoded into a fixed length sequence
+of digits none of which is zero, so how many point additions and doublings a
+multiplication *schedules* follow that public order and nothing else. On
+NIST256p signing and key generation schedule 65 additions and no doublings at
+all once the generator has built its precomputation table, whatever the nonce,
+where the older ladder ranged over dozens of distinct counts. Building that
+table, and multiplying a point that carries no table as ECDH does, each settle
+on a count of their own in the same way.
 
-Two things used to carry the leak. The former ladder skipped an addition on a
-zero digit, which made its addition count the Hamming weight of the NAF
-recoding of the multiplier; and the nonce bit-length padding added in 0.14 was
-cancelled further down by a reduction modulo twice the order, so it did
-nothing for the very case that needed it -- the "nonce unpadding" failure the
-side channel analysis of Mozilla's NSS (arXiv:2008.06004) describes. There is
-no longer a padding for a reduction to undo. Separately, the modular inversion
-of the nonce is performed on a blinded value and unblinded afterwards, so the
-iterations of the extended Euclid loop no longer follow the nonce either; that
-blinding factor is drawn afresh for every signature, so what is inverted is
-unrelated to the nonce, at the cost in entropy set out below.
+**What is not hidden** is the cost of an individual operation. Python integers
+are variable width and the field arithmetic deliberately skips the reduction
+modulo the field prime where that is faster, so **a residual timing signal
+remains, this is not a constant-time implementation, and no such claim is
+made** -- every warning above continues to apply, and power analysis,
+electromagnetic emanation, cache timing and other microarchitectural channels
+are not addressed anywhere in this library. Three coverage limits are worth
+naming here, and [`SECURITY.md`][4] gives all of them in full:
 
-**The resulting count is fixed per code path**, and is not one number for the
-whole library. Once a generator has built its precomputation table, which the
-first multiplication pays for, signing and key generation perform 65 point
-additions and no doublings at all on NIST256p, whatever the nonce -- and the
-count collapses to a single value on every other curve too: 65 on SECP256k1
-and BRAINPOOLP256r1, 41 on SECP160r1, 64 on Ed25519, 131 on NIST521p. On
-NIST256p the old ladder ranged over dozens of distinct counts instead, about
-twenty additions for a nonce a quarter of the full width against about ninety
-for a full-width one. Building that table, and multiplying a point that has no
-table at all as ECDH does, each settle on a count of their own, fixed by the
-curve in the same way, and known-order affine multiplication delegates to the
-hardened path.
+* the scheduled count is the whole cost of every multiplier except at most two
+  residues of any order, which a twisted Edwards ladder answers with one
+  doubling more. A nonce reaches one with probability of the order of two
+  divided by the order itself;
+* the fixed ladder is unavailable in three cases -- the order is absent, even,
+  or below 17 -- and a point in any of them keeps the older ladder, whose cost
+  follows its multiplier. Every registered curve declares an odd order of at
+  least 110 bits, so only the first case reaches one;
+* an absent order is the remaining limitation. A public point decoded from an
+  encoding carries none, so an ECDH exchange against a peer key that arrived
+  over the wire multiplies the long-term private key on that older ladder,
+  where the doubling count is the bit length of that key. Signing, key
+  generation, and an exchange against a public key this process derived from a
+  `SigningKey`, are covered.
 
-EdDSA signing on the Edwards curves uses the same recoding, with one exception
-that is disclosed rather than removed. The digit of the lowest position is
-added last, to an accumulator that by then holds the canonical multiplier less
-that digit times the point, and the two operands of that addition coincide
-exactly where the canonical value is congruent to twice that digit modulo the
-order. At most two residues of any order qualify -- seven of the registered
-curves have two, eighteen have exactly one, and SECP160r1 has none at all -- so
-a nonce reaches one with probability of the order of two divided by the order
-itself, about 2\*\*-255 on a 256-bit curve. Where it does happen a short
-Weierstrass ladder answers that addition from inside the addition formula and
-dispatches no further operation, while a twisted Edwards ladder dispatches a
-doubling and so performs one operation more than every other multiplier does.
+This is local hardening only. No release is recorded anywhere as fixing
+CVE-2024-23342 -- the advisory lists every version as affected and none as
+patched -- so a vulnerability scanner will keep reporting CVE-2024-23342 and
+PYSEC-2026-1325 against this library whether or not the countermeasure is
+present.
 
-A point whose order the recoding cannot use keeps the older ladder, whose cost
-follows its multiplier. There are exactly three such orders: no order at all,
-an even order, and an order smaller than 17. The last two are consequences of
-the mechanism rather than choices -- an even order has no odd representative
-for the multiplier to be reduced to, and an order below 17 cannot be recoded at
-all, because one of the eight odd multiples of the point that a digit position
-indexes would then be the point at infinity, which an affine table entry cannot
-hold -- and every curve this library registers declares an odd order of at
-least 110 bits, so neither reaches a registered curve.
+**Compatibility.** Signatures are byte for byte the ones earlier releases
+produced, RFC 6979 deterministic signatures stay reproducible byte for byte,
+and public call signatures, key encodings, signature encodings and return types
+are unchanged. Three things did change, and this is the whole list:
 
-The first of the three is where the honest limit of this change lies. A public
-point decoded from an encoding carries no order: `VerifyingKey.from_string()`
-builds it from coordinates alone and nothing attaches the order of the curve to
-it. An ECDH exchange against a peer key that arrived over the wire therefore
-multiplies the long-term private key on the older ladder, and the number of
-doublings that ladder performs is the bit length of that key -- measured on
-NIST256p, 256, 192, 128 and 64 doublings for a private key of those bit
-lengths, against a fixed 72 additions and 257 doublings when the same exchange
-runs against a public key this process derived from a `SigningKey`, which does
-carry the order. Signing and key generation multiply the generator of the
-curve, which carries its order on every registered curve, and are covered; an
-exchange is covered only where the remote point carries one. A point on a curve
-of the caller's own, and one taken by `VerifyingKey.from_string()` with
-`validate_point=False` that turns out not to lie on the curve or not to belong
-to the group the base point generates, are on that same ladder for the same
-reason. None of them is rejected instead: rejecting would withdraw a documented
-opt-out, and it would not make the multiplication any cheaper to hide.
-
-**What is not hidden**, and cannot be in pure Python, is the cost of an
-individual operation. Python integers are variable width and cost more to work
-with as they grow, and the field arithmetic deliberately skips the reduction
-modulo the field prime where that is faster, so individual operations still
-differ in duration even though their number no longer does. **A residual
-timing signal therefore remains, this is not a constant-time implementation,
-and no such claim is made** -- every warning above continues to apply. Power
-analysis, electromagnetic emanation, cache timing and other microarchitectural
-channels are not addressed anywhere in this library. This is local hardening
-only: it does not create an upstream patched-version marker, and the advisory
-lists every version as affected and none as patched, so a vulnerability
-scanner will keep reporting CVE-2024-23342 and PYSEC-2026-1325 against this
-library whether or not the countermeasure is present.
-
-**Almost nothing a caller reads out has changed.** Signatures are byte for
-byte the ones earlier releases produced, RFC 6979 deterministic signatures
-stay reproducible byte for byte, and public call signatures, key encodings and
-signature encodings are unchanged. The state a point writes when it is pickled
-is unchanged too -- the plain instance dictionary, precomputation table and
-all, exactly what every release up to 0.19.1 wrote -- and a point unpickled
-with a precomputation table an earlier release wrote is still accepted, that
-table being recognised as one of another layout, discarded and lazily rebuilt.
-The opposite direction is not guarded and cannot be: a state written here and
-read by a release older than the countermeasure hands it a table of the new
-layout to index as the successive doublings it expects, and it would answer
-with a wrong point rather than raise. That residual is accepted, and
-[`SECURITY.md`][4] records it.
-
-**One thing a caller can observe did change**, and it is the only one. A
-multiplier that is not an integer is refused with a `TypeError` naming its
-type, `multiplier must be an integer, not str` and so on. Every multiplication
-asks the value for its integer through `operator.index()` before it does
-anything else, which takes `int`, `bool` and the `mpz` of both gmpy releases
-losslessly and refuses everything else, where earlier releases answered each
-such value with whatever the arithmetic made of it, and made something
-different of it on each shape of point: a `str` or a `list` raised from the
-reduction at the top of the multiplication with a message about string
-formatting or about the `%` operator, a `None` was read as a zero and answered
-with the point at infinity, and a `float` was accepted in silence and answered
-with the point for some other integer -- 3.0, 3.5 and 3.9 all answering with
-three times the point while 2.5 answered with one times it. The refusal is
-deliberate: the shortcut that answers a multiplier of one had to move behind
-that normalising step, or a nonce of one would never reach a ladder at all.
-
-One further behaviour changed without being visible in the output. Signing
-draws one factor to blind the modular inversion per signature and reads
-`os.urandom()` at least once to obtain it -- the rejection sampling of
-`util.randrange()` reads it again for every draw it discards, and a factor
-that is not invertible modulo a composite generator order is drawn again as
-well -- so it reads from the system entropy source where earlier releases did
-not: when the caller passed the nonce in, and when the nonce is the
-deterministic one of RFC 6979. That draw is separate from the `entropy=`
-argument, which still feeds nonce generation only, and it does not reach the
-signature, the blinding cancelling exactly. Should the entropy source refuse,
-signing raises `RuntimeError` -- the exception
-`ecdsa.ecdsa.Private_key.sign()` has always documented -- instead of falling
-back to an unblinded inversion, so exhausting the entropy source cannot be
-used to switch the countermeasure off.
+* a pickled point still carries the plain instance dictionary, but the
+  precomputation table inside it holds a new layout. A table an earlier release
+  wrote is recognised, discarded and lazily rebuilt; the opposite direction is
+  not guarded and cannot be, so a state written here and read by a release older
+  than the countermeasure would answer with a wrong point rather than raise;
+* a multiplier that is not an integer is refused with a `TypeError` naming its
+  type, where earlier releases variously read it as a zero, answered it with
+  the point for some other integer, or raised something that named the `%`
+  operator rather than the multiplier;
+* signing draws one blinding factor per signature, so it reads `os.urandom()`
+  even when the caller supplied the nonce or asked for the deterministic one of
+  RFC 6979. That draw is separate from the `entropy=` argument and does not
+  reach the signature; should the source refuse, signing raises `RuntimeError`
+  rather than dropping the blinding.
 
 **The reduction is measured, not assumed.**
-`src/ecdsa/test_side_channel.py` pins the point operation counts above to
-exact numbers and runs as part of the normal test suite. `minerva_probe.py`,
-in the repository root, measures the wall clock signal that remains: it times
+`src/ecdsa/test_side_channel.py` pins the point operation counts above to exact
+numbers and runs as part of the normal test suite. `minerva_probe.py`, in the
+repository root, measures the wall clock signal that remains: it times
 signatures, groups them by the bit length of the nonce behind each one, and
-applies the statistical battery the external `tlsfuzzer` harness applies to
-the same question. It tests the configured `PREFIX_SIZES` and reports the
-earliest configured prefix at which a test rejects, which brackets the true
-threshold from above rather than finding the exact minimum. It is opt-in and
-deliberately **not** part of the default test run or of CI, a statistical
-timing measurement being unusable as a pass/fail gate:
+applies the statistical battery the external `tlsfuzzer` harness applies to the
+same question. It reports the earliest rejecting configured prefix of
+`PREFIX_SIZES`, or that no rejection occurred at the tested prefixes through
+the largest of them -- an observation about those prefixes and nothing more,
+from which no threshold is inferred. It is opt-in and deliberately **not** part
+of the default test run or of CI, a statistical timing measurement being
+unusable as a pass/fail gate:
 
 ```
 tox -e leak
@@ -471,8 +380,8 @@ tox -e leak
 It exits 0 when it produced a usable report, 1 when its own self-check failed,
 and 2 when it could not produce a report it is willing to stand behind. It
 certifies nothing: a smaller measured signal is a smaller measured signal and
-no more than that. [`SECURITY.md`][4] describes the countermeasure, its
-coverage and the residual risk in full.
+no more than that. [`SECURITY.md`][4] is the canonical description of the
+countermeasure, its coverage, its compatibility notes and the residual risk.
 
 Please also note that any Pure-python cryptographic library will remain
 vulnerable to side-channel attacks whatever is done at the level described
@@ -731,9 +640,9 @@ immediately reveal the private signing key). The `sk.sign()` method takes an
 
 Signing draws one further value that `entropy=` does not control: the factor
 that blinds the modular inversion, described under [Security](#security). It
-comes from `os.urandom()` -- one factor per signature whatever the nonce was,
+comes from `os.urandom()`: one factor per signature whatever the nonce was,
 obtained with at least one read of that source and with more whenever a draw is
-discarded -- it does not change the signature produced, and signing raises
+discarded. It does not change the signature produced, and signing raises
 `RuntimeError` rather than dropping the blinding should that source refuse.
 
 ## Deterministic Signatures

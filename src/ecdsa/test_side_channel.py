@@ -4,243 +4,66 @@ Deterministic regression tests for the nonce bit length side channel.
 CVE-2024-23342, GHSA-wj6h-64fc-37mp and PYSEC-2026-1325 report a Minerva class
 attack against this library: the time `ecdsa.keys.SigningKey.sign_digest()`
 took was a function of the secret per signature nonce, so an attacker able to
-time enough signatures learns a few high order bits of each nonce and
-assembles those partial leaks into a hidden number problem lattice that
-recovers the long term private key.  Key generation and ECDH key agreement
-multiply by the private key over the same code, and were affected the same
-way.  Signature verification, which handles only values anyone holding the
-signature can derive, was not.
+time enough signatures learns a few high order bits of each nonce and assembles
+those partial leaks into a hidden number problem lattice that recovers the long
+term private key.  Key generation and ECDH key agreement multiply by the
+private key over the same code and were affected the same way.  Signature
+verification, which handles only values anyone holding the signature can
+derive, was not.
 
 What carried the leak was the number of elliptic curve point operations a
-multiplication performed.  The number of point additions equalled the Hamming
-weight of the non adjacent form of the multiplier and the number of iterations
-of the table less ladder tracked its bit length, so both followed the nonce;
-and the bit length padding `ecdsa.ecdsa.Private_key.sign()` applied to hide the
-nonce was annihilated by the reduction the multiplication then performed on the
-padded value, which is the "nonce unpadding" failure the side channel analysis
-of Mozilla's NSS (arXiv:2008.06004) describes.  The countermeasure normalises
-the multiplier inside the arithmetic layer and recodes it into a fixed length
-sequence of digits none of which is zero, so that the number of point
-operations follows the curve order -- which is public -- and nothing else.
-
-That fixed number of operations is what a point whose order the recoding can
-use performs, which is every point the registered curves and the secret bearing
-entry points of this library reach, and such a point performs it for every
-multiplier it accepts, zero and one included, so that no value a caller can
-hand one of those multiplications is answered without the work.  A point that
-carries no usable order keeps the older ladder, whose count follows the
-multiplier; `TestEdgeCasePreservation` pins what that ladder answers as a
-compatibility behaviour and not as a hardened one.  A multiplier that is not an
-integer has no bits for the recoding to read and is refused, uniformly and
-before either ladder is chosen; `TestMultiplierNormalisation` is where that is
-asserted, and it is the one caller visible change in this file.
+multiplication performed: the number of point additions equalled the Hamming
+weight of the non adjacent form of the multiplier, and the number of iterations
+of the table less ladder tracked its bit length.  The bit length padding
+`ecdsa.ecdsa.Private_key.sign()` applied to hide the nonce was annihilated by
+the reduction the multiplication then performed on the padded value, which is
+the "nonce unpadding" failure the side channel analysis of Mozilla's NSS
+(arXiv:2008.06004) describes.  The countermeasure normalises the multiplier
+inside the arithmetic layer and recodes it into a fixed length sequence of
+digits none of which is zero, so the point operations a ladder schedules follow
+the public curve order and nothing else, for every multiplier a point accepts,
+zero and one included.
 
 These tests therefore assert **point operation counts**, never the wall clock.
-Both reasons are deliberate: the operation count is the carrier the leak
-travelled on, so counting it measures that carrier directly rather than
-standing in for it; and a wall clock assertion in a unit suite would be
-inherently flaky, would have no threshold that holds across machines, and is
-re-run hundreds of times over by the mutation testing gate.  The statistical
-wall clock measurement of the signal that remains lives in the
-`minerva_probe.py` script at the root of this repository, and is deliberately
-kept out of this suite.
+The operation count is the carrier the leak travelled on, so counting it
+measures that carrier directly; and a wall clock assertion in a unit suite
+would be inherently flaky, would have no threshold that holds across machines,
+and is re-run hundreds of times over by the mutation testing gate.  The
+statistical wall clock measurement of the signal that remains lives in the
+`minerva_probe.py` script at the root of this repository.
 
-Nothing here claims that an operation of this library takes the same amount of
-time whatever its inputs are, and nothing could: Python integers cost time
-proportional to their magnitude, and `ecdsa.ellipticcurve` deliberately skips
-the reduction modulo the field prime where that is faster, so the width of the
-field operands still varies.  What these tests pin is the number of point
-operations, and the shape of the recodings that fixes it.
+What is asserted is bounded in three ways, and each bound has tests of its own.
+Signing, key generation, EdDSA, and an ECDH exchange whose remote public point
+carries the curve order, schedule a number of point operations that follows the
+order alone; an exchange against a public point decoded from an encoding gets
+no order with it, keeps the multiplier driven ladder, and is the remaining
+decoded-key ECDH limitation, which `TestECDHKeyAgreement` measures on both
+sides.  A point built without a usable order keeps that older ladder too, and
+`TestEdgeCasePreservation` pins what it answers as a compatibility behaviour
+rather than a hardened one.  And no operation of this library is claimed to
+cost the same whatever its inputs are: a Python integer operation costs
+according to the limb width of its operands, and `ecdsa.ellipticcurve`
+deliberately skips the reduction modulo the field prime where that is faster,
+so the widths of the field operands still vary.
 
 Most of what is asserted here fails against the arithmetic of the unmodified
 0.19.1+2.g55aca78 tree, which is what makes these tests evidence of a defect
-rather than a description of the code that replaced it.  The class named for
-signature transparency is the exception and asserts, every test of it, what
-the countermeasure had to leave exactly as it was; the one named for edge case
-preservation is very nearly that too, in twelve of its sixteen tests, and what
-the few remaining ones are for is named below.  Every count in the paragraphs
-that follow was measured by
-copying this file -- and nothing else -- into a checkout of 55aca78 and
-running `pytest src/ecdsa/test_side_channel.py` against it, so any reader can
-take the measurement again rather than take these numbers on trust.
+rather than a description of the code that replaced it.  Counted by copying
+this file -- and nothing else -- into a checkout of 55aca78 and running `pytest
+src/ecdsa/test_side_channel.py` there, 111 of the 160 tests failed and 49
+passed, so any reader can take the measurement again rather than take that
+number on trust.  `TestSignatureTransparency` is the oracle for the
+countermeasure being invisible from the outside and passes on both trees, every
+test of it; the addition and doubling counts, the ECDH doubling counts, the
+recodings, the canonical multiplier, the narrow order groups, the polarity of a
+signed digit, the nonce unpadding arithmetic and the Edwards raw scalar are
+where that tree fails.
 
-* `TestPointAdditionCountInvariance` fails in every one of its twelve tests.
-  Walked with the helpers of this module -- the six bit widths
-  `stratified_widths()` returns for a curve and the eight multipliers of each
-  that `SCALARS_PER_WIDTH` asks for outside the fast selection -- the number
-  of point additions of a multiplication took 23 to 31 distinct values per
-  curve there, spanning 52 to 92 additions on NIST256p, 19 to 57 on SECP160r1
-  and 44 to 94 on Ed25519, where each of those curves now answers every one of
-  those multipliers with a single count.  One of the twelve takes a
-  multiplication through a pickle, and it fails there for a second reason as
-  well as that one: the table a release up to 0.19.1 writes into its state is
-  of another length and is indexed as the successive doublings of the point, so
-  a restored point costs there whatever an unserialised one costs, which is to
-  say a count that follows the multiplier.
-* `TestSignedDigitSymmetry` fails in five of its six tests, each of the five
-  for want of the recoding whose digits it counts the coordinate negations of.
-  What it pins is the half of the fixed work ladder a count of point
-  operations does not reach: a negative digit and a positive one have to cost
-  the same negation, or the number of negations would follow the multiplier
-  even where the number of point operations no longer does.  The test that
-  passes there guards the counter itself and needs nothing of the recoding.
-* `TestNonceUnpaddingRegression` fails by construction in six of its ten
-  tests, most plainly on SECP160r1, the registered curve whose order left the
-  old padding useless for all but a vanishing fraction of the nonces.  The four
-  that pass there are meant to: they work out arithmetically what the old
-  padding and the old reduction did to a nonce without asking either ladder to
-  do anything, so they describe the defect on both trees alike.
-* `TestEdwardsRawScalarRegression` fails in two of its four tests.  The
-  padding the class above is about was applied in `Private_key.sign()` and
-  nowhere else, and EdDSA never went through it, so what the Edwards ladder
-  had was a leak of its own rather than a cancelled countermeasure and this
-  class is where it is stated: `ecdsa.eddsa.PrivateKey.sign()` multiplies the
-  generator by a whole hash, which those releases reduced modulo twice the
-  order and then spent a number of point operations on that followed the width
-  and the non adjacent form of what came out.  Both of those two failures are
-  an `AttributeError` for an internal the unmodified tree does not define, the
-  digit width in one and the normalisation in the other, which is a weaker kind
-  of evidence than an assertion that fails, so the leak is stated in the form
-  that needs neither: the eight multipliers of 512, 253, 128 and 64 bits that
-  the addition count test of that class drives cost that tree between 22 and 87
-  point additions, a spread of 65 over the widths a hash covers, where every one
-  of them now costs 64.  The two tests that pass there are what makes the class
-  evidence of that rather than a description of the curves: one is the width of
-  the multiplier EdDSA hands over, measured through the signing path itself,
-  and the other is the spread the old reduction left of it, and both hold on
-  either tree.
-* `TestFixedDigitRecoding` and `TestCanonicalScalar` fail with an
-  `AttributeError`: the recoding they describe did not exist.  One test of
-  each survives there, and neither touches it: the one that asserts the non
-  adjacent form the verification path still uses is where it always was, and
-  the one that asserts every registered curve has an odd order.
-* `TestNarrowOrderHardening` fails in twelve of its fifteen tests, all twelve
-  for want of the recoding the narrow groups it builds are driven through.
-  Those groups are of seventeen points upwards, between three and fourteen
-  orders of magnitude narrower than the narrowest curve this library registers,
-  so they are where the leak is widest relative to the group and they are small
-  enough to be checked for every multiplier there is.  Of the three that pass,
-  two check that those groups -- the short Weierstrass ones and the twisted
-  Edwards ones -- are the groups they claim to be, and the third measures what
-  they cost before the countermeasure, so it describes the defect on both trees
-  alike.
-* `TestMultiplierNormalisation` fails in nine of its twelve tests, and it is
-  the one class here whose subject is a change a caller can observe.  Six of
-  the nine are an `AttributeError` for the normalising step itself, which the
-  unmodified tree does not define; the other three assert the refusal through
-  the multiplication operator, where that tree answered a float of one with the
-  point, read a `None` as a zero, and refused the rest by way of whichever
-  arithmetic operation reached them first.  Of the three that pass, one is the
-  half of the refusal that tree did draw -- a value whose ``__index__()``
-  answers with a string was refused there too, by the reduction modulo the
-  order -- one is the point at infinity, answered ahead of the multiplier on
-  both trees, and the third is why the change costs this library's own callers
-  nothing: every multiplier the signing, key generation, ECDH and EdDSA paths
-  form is an integer, asserted by driving all four rather than argued.
-* `TestBlindedInversion` fails in nine of its eleven tests, six of them with an
-  `AttributeError`: blinding the inversion of the nonce is the one thing
-  signing does now that it did not do before, so the signing module of that
-  tree reaches for no entropy source and the name those six stand in for -- its
-  `randrange` -- is not there to be found.  Of the three that reach their
-  assertions, two are the countermeasure itself: signing did not read the
-  operating system at all where it now reads it at least once per signature, and
-  eight repetitions of one signature handed the inversion one operand where they
-  now hand it eight.  The third is the residue that is left deliberately: on that
-  tree a nonce of one or of two left the point in a form whose first coordinate
-  could be read without inverting anything modulo the field prime, so signing
-  inverted once for those two nonces and twice for the rest.  The two that pass
-  describe a collaborator rather than the library -- what `util.randrange()`
-  can answer with, and that a factor drawn from it blinds and unblinds on every
-  curve -- so they hold on both trees and are what makes the rejection branch
-  the tests above drive reachable only on a composite order.
-* One class in this file asserts a change a caller can observe, and only one:
-  `TestMultiplierNormalisation`, where a multiplier that is not an integer is
-  refused rather than truncated or read as a zero.  It is called out here
-  because the rest of the file deliberately does not, and because that refusal
-  is a deliberate part of the change -- the guard that answered a multiplier of
-  one had to move behind the normalising step, or a nonce of one would never
-  reach a ladder.  Of the remaining classes, the tests that name an internal --
-  the recorded and recoded orders of `TestECDHKeyAgreement`, the drawn factor
-  and the blinded operand of `TestBlindedInversion`, the digit widths and table
-  shapes elsewhere -- name it as an internal; everything else asserts either a
-  cost that no longer follows a secret, an answer that did not change at all,
-  or the one cost the countermeasure does add and discloses: signing now reads
-  the entropy source even where the caller fixed every other value the
-  signature depends on.
-* Six classes, and only six, take as their subject a step the countermeasure
-  ADDED rather than a property of a step that was already there:
-  `TestFixedDigitRecoding` for the recoding, `TestCanonicalScalar` for the
-  canonical multiplier, `TestSignedDigitSymmetry` for the negation a signed
-  digit costs, `TestNarrowOrderHardening` for the floor the recoding puts on the
-  order, `TestBlindedInversion` for the blinding factor, and
-  `TestMultiplierNormalisation` for the normalising step every multiplication
-  now starts with.  That is the criterion, stated so a reader can apply it: a
-  class is of the added kind when the step it names did not exist before the
-  countermeasure, and an oracle when the step it names did exist and either did
-  not change or changed only in what it costs.  The other eight classes here
-  all name something the unmodified tree did too -- the additions of a
-  multiplication, the doublings of an exchange, what the old padding did to a
-  nonce, what the old reduction left of a hash, the products of the edge case
-  multipliers, the bytes of a signature -- or, in the case of
-  `TestOperationCounter`, the instrumentation rather than the library.  Two
-  individual tests of `TestEdgeCasePreservation`, named below, are of the
-  added kind inside a class that is otherwise an oracle.
-* `TestPointDoublingCountInvariance` fails in eleven of its twelve tests.  The
-  leak the class exists for is in its table less part, the ladder an ECDH
-  exchange drives, where the number of doublings followed the bit length of
-  the multiplier.  That a multiplication against a filled table performs no
-  doubling at all did hold before the countermeasure as well -- but the three
-  tests which assert it fail there too, because each of them pins the number
-  of additions of the same multiplication alongside the doublings, and the
-  count it is compared against is one the unmodified tree does not define.
-  The one test that passes there asks only that the two ladders agree on the
-  product.
-* `TestECDHKeyAgreement` fails in seven of its ten tests, and it is the class
-  that states the honest limit of this change as well as the gain.  The gain:
-  an exchange whose remote public point carries the curve order -- a
-  `ecdsa.keys.VerifyingKey` this process derived from a
-  `ecdsa.keys.SigningKey` -- costs one fixed number of point operations on this
-  tree, where on the unmodified one the same exchange performs 256, 192, 128
-  and 64 point doublings for a NIST256p private key of those bit lengths, the
-  cost following the long term key exactly.  Those seven failures are that
-  count and the shapes it is derived from.  The limit: a public point that
-  arrived from an encoding carries no order, nothing attaches one to it, and an
-  exchange against it keeps the multiplier driven ladder on both trees, so its
-  doubling count still follows the private key.  Three tests pass either way,
-  and they are what makes the limit a measured statement rather than an
-  omission -- the agreement of the two peers, that a decoded key reports no
-  order, and that an exchange against one is driven by the private key on both
-  trees alike.
-* `TestSignatureTransparency` passes before and after, every one of its eleven
-  tests.  It is the oracle for the countermeasure being invisible from the
-  outside: the signatures it asserts are the bytes the unmodified tree
-  produced.
-* `TestEdgeCasePreservation` passes in twelve of its sixteen tests there, and
-  those twelve are what the class is for: the products of zero, one, the
-  order, its multiples and one less than it, on every shape of point, are the
-  products the unmodified tree gave -- down to which of those multipliers hand
-  back the very object that was multiplied.  Of the four that fail, one asks
-  what those multipliers cost, which is the one thing about them the
-  countermeasure did change; one asserts the products of a point at infinity
-  that carries an order, which are the same on both trees, but asks the module
-  first whether that order is one the recoding can use, which the unmodified
-  tree cannot answer; and the last two are the two edges that a `None` reaches,
-  refused here and read as a zero there, which is the caller visible change
-  `TestMultiplierNormalisation` is about.
-* `TestOperationCounter` guards the instrumentation the counting tests are
-  built on rather than the library.  Only the one of its six tests that states
-  an operation count needs the countermeasure to be there; the rest pass
-  either way.
-
-Counted against that tree, 111 of the 160 tests in this file failed and 49
-passed, class by class: 12 of 12 in `TestPointAdditionCountInvariance`, 11 of
-12 in `TestPointDoublingCountInvariance`, 7 of 10 in `TestECDHKeyAgreement`,
-12 of 13 in `TestFixedDigitRecoding`, 21 of 22 in `TestCanonicalScalar`, 12 of
-15 in `TestNarrowOrderHardening`, 5 of 6 in `TestSignedDigitSymmetry`, 6 of 10
-in `TestNonceUnpaddingRegression`, 2 of 4 in `TestEdwardsRawScalarRegression`,
-9 of 12 in `TestMultiplierNormalisation`, 9 of 11 in `TestBlindedInversion`,
-1 of 6 in `TestOperationCounter` and 4 of 16 in `TestEdgeCasePreservation`
-failed, while 0 of 11 in `TestSignatureTransparency` did.
+`TestMultiplierNormalisation` asserts the one change a caller can observe: a
+multiplier that is not an integer is refused, uniformly and before either
+ladder is chosen, rather than truncated or read as a zero.  The guard that
+answered a multiplier of one had to move behind that normalising step, or a
+nonce of one would never reach a ladder at all.
 """
 
 import os
@@ -446,7 +269,7 @@ def fixed_ladder_shape(order, window=None):
 
 def table_less_shape(curve, window=None):
     """
-    Additions and doublings a multiplication without a table performs.
+    Additions and doublings a multiplication without a table schedules.
 
     One addition per digit plus the ones that build the odd multiples of the
     point, and a whole window of doublings per digit -- except that the
@@ -455,14 +278,18 @@ def table_less_shape(curve, window=None):
     one performs it.  Both spend one further doubling on the step between
     consecutive odd multiples.
 
-    This is the shape of every multiplication of a point that knows its order
-    but carries no table, which is what an ECDH exchange multiplies.
+    Scheduled work, and so the whole cost of every multiplier but the at most
+    two residues `equal_operand_residues()` names, which cost one doubling
+    beyond the schedule on a twisted Edwards curve because the addition formula
+    dispatches back through the doubling one.  This is the shape of a
+    multiplication of a point that knows its order and carries no table, which
+    is what an ECDH exchange multiplies.
 
     :param curve: the curve the point belongs to
     :param window: the digit width to use, the one the module is built with by
         default
 
-    :return: the number of additions and the number of doublings
+    :return: the additions and the doublings the ladder schedules
     :rtype: tuple of two int
     """
     if window is None:
@@ -584,7 +411,6 @@ EDWARDS_FORMULAS = ("_add", "_double")
 
 
 def formulas_of(curve):
-    """Return the formula names to count for the point class of `curve`."""
     if point_class_of(curve) is PointEdwards:
         return EDWARDS_FORMULAS
     return JACOBI_FORMULAS
@@ -664,7 +490,6 @@ class NegationCounter(_INT_BASE):
 
 
 def _wrap_coordinates(entries):
-    """Return `entries` with every coordinate counted, shape preserved."""
     return [
         tuple(NegationCounter(value) for value in entry) for entry in entries
     ]
@@ -785,7 +610,6 @@ def rebuilt_generator(curve, generator=True):
 
 
 def order_less_point(curve):
-    """Return a copy of the generator of `curve` that knows no order."""
     point = curve.generator
     if isinstance(point, PointEdwards):
         return PointEdwards(
@@ -1042,7 +866,7 @@ class TestOperationCounter(unittest.TestCase):
 
 class TestPointAdditionCountInvariance(unittest.TestCase):
     """
-    The number of point additions must not follow the multiplier (Defect #2).
+    The number of point additions must not follow the multiplier.
 
     A multiplication by a point that carries a multiplication table -- the
     signing and the key generation case -- performs exactly one addition per
@@ -1165,7 +989,6 @@ class TestPointAdditionCountInvariance(unittest.TestCase):
         )
 
     def test_addition_count_on_ed25519(self):
-        """The Edwards ladder, which EdDSA signing drives with a hash."""
         self.assert_addition_count_is_fixed(
             Ed25519, stratified_widths(Ed25519.order)
         )
@@ -1307,48 +1130,56 @@ class TestPointAdditionCountInvariance(unittest.TestCase):
 
 class TestPointDoublingCountInvariance(unittest.TestCase):
     """
-    The number of point doublings must not follow the multiplier (Defect #3).
+    The number of point doublings must not follow the multiplier.
 
     Two separate claims, because the two ladders reach the number differently.
-    A point that carries a multiplication table spends every doubling it will
-    ever spend on building that table, during the first multiplication, and
-    performs none at all afterwards; that was true before the countermeasure as
-    well, and the wall clock probe at the root of this repository relies on it
-    when it warms a generator before timing anything.  A point that knows its
-    order but carries no table -- which is what an ECDH exchange multiplies,
-    by the long term private key rather than by a single use nonce -- doubles a
-    fixed number of times derived from that order.  Before the countermeasure
+    A point that carries a multiplication table schedules every doubling it
+    will ever schedule on building that table, during the first multiplication,
+    and none at all afterwards; that held in releases through 0.19.1 as well,
+    and the wall clock probe at the root of this repository relies on it when
+    it warms a generator before timing anything.  A point that knows its order
+    but carries no table -- which is what an ECDH exchange multiplies, by the
+    long term private key rather than by a single use nonce -- schedules a
+    number of doublings derived from that order.  In releases through 0.19.1
     that ladder ran once per digit of the non adjacent form of the multiplier,
     so its doubling count was determined by the bit length of the multiplier --
     a non adjacent form can carry one digit further than that length -- and the
     leak there exposed a key that does not change between signatures.
+
+    Both claims are about scheduled work.  On a twisted Edwards curve the at
+    most two residues `equal_operand_residues()` names cost one doubling beyond
+    the schedule, because the addition formula dispatches back through the
+    doubling one; `TestNarrowOrderHardening` asserts both that count and which
+    multipliers pay it, and ``SECURITY.md`` records it as a residual.
     """
 
-    def expected_first_multiplication(self, curve, window=None):
+    def scheduled_first_multiplication(self, curve, window=None):
         """
-        Additions and doublings the multiplication that fills a table performs.
+        The work the multiplication that fills a table schedules.
 
         The table holds the odd multiples of the point for every digit
         position, so building it costs one doubling for the step between
         consecutive odd multiples of a position and a whole window more to
         carry that step to the next position, and one addition for every entry
         but the first of each position.  Adding the additions the
-        multiplication itself then performs, one per digit, brings the total to
-        exactly one addition per table entry.
+        multiplication itself then schedules, one per digit, brings the total
+        to exactly one addition per table entry.
         """
         if window is None:
             window = ellipticcurve._MUL_WINDOW
         digits, entries = fixed_ladder_shape(curve.order, window)
         return entries, window * (digits - 1) + 1
 
-    def expected_table_less_multiplication(self, curve, window=None):
+    def scheduled_table_less_multiplication(self, curve, window=None):
         """
-        Additions and doublings a multiplication without a table performs.
+        The work a multiplication without a table schedules.
 
-        Read from `table_less_shape()`.  The other place this shape is
-        asserted, `TestECDHKeyAgreement`, writes the same two counts out again
-        rather than calling that helper, so that the shape an exchange is held
-        to does not come from the one expression this class checks.
+        Read from `table_less_shape()`, and so scheduled work only: the twisted
+        Edwards exception that helper describes is asserted where the residues
+        reaching it are, in `TestNarrowOrderHardening`.  The other place this
+        shape is asserted, `TestECDHKeyAgreement`, writes the same two counts
+        out again rather than calling that helper, so that the shape an exchange
+        is held to does not come from the one expression this class checks.
         """
         return table_less_shape(curve, window)
 
@@ -1366,7 +1197,7 @@ class TestPointDoublingCountInvariance(unittest.TestCase):
             point_class, multiplier(generator, scalar)
         )
 
-        expected = self.expected_first_multiplication(curve)
+        expected = self.scheduled_first_multiplication(curve)
         self.assertEqual((additions, doublings), expected)
         # one addition per table entry, and the entries hold as many
         # coordinates as the addition formula of this curve type consumes
@@ -1381,26 +1212,25 @@ class TestPointDoublingCountInvariance(unittest.TestCase):
         # literals so that a change to any of the formulas is caught here and
         # not only in a comparison of one derived value against another
         self.assertEqual(
-            self.expected_first_multiplication(NIST256p, 4), (520, 257)
+            self.scheduled_first_multiplication(NIST256p, 4), (520, 257)
         )
 
     def test_first_multiplication_on_secp160r1(self):
         self.assert_first_multiplication(SECP160r1, 2)
         self.assertEqual(
-            self.expected_first_multiplication(SECP160r1, 4), (328, 161)
+            self.scheduled_first_multiplication(SECP160r1, 4), (328, 161)
         )
 
     def test_first_multiplication_on_ed25519(self):
-        """Edwards table entries are triples, not pairs."""
         self.assert_first_multiplication(Ed25519, 3)
         self.assertEqual(
-            self.expected_first_multiplication(Ed25519, 4), (512, 253)
+            self.scheduled_first_multiplication(Ed25519, 4), (512, 253)
         )
 
     def test_first_multiplication_on_brainpoolp384r1(self):
         self.assert_first_multiplication(BRAINPOOLP384r1, 2)
         self.assertEqual(
-            self.expected_first_multiplication(BRAINPOOLP384r1, 4), (776, 385)
+            self.scheduled_first_multiplication(BRAINPOOLP384r1, 4), (776, 385)
         )
 
     def assert_no_doubling_after_the_table_is_built(self, curve):
@@ -1414,7 +1244,9 @@ class TestPointDoublingCountInvariance(unittest.TestCase):
         )
 
         # a second multiplier of the full width, and a third of a quarter of
-        # it: neither costs a doubling, and both cost the same additions
+        # it: both cost the same additions, and neither schedules a doubling.
+        # Both come from a fixed seed, so neither is one of the at most two
+        # residues that cost a doubling beyond the schedule
         for width in (top, top // 4):
             scalar = scalars_of_width(width, 1, seed=3)[0]
             _, additions, doublings = count_point_operations(
@@ -1459,7 +1291,7 @@ class TestPointDoublingCountInvariance(unittest.TestCase):
                 doublings.add(doubled)
         self.assertEqual(precompute_table(point), [])
 
-        expected = self.expected_table_less_multiplication(curve)
+        expected = self.scheduled_table_less_multiplication(curve)
         self.assertEqual(len(doublings), 1)
         self.assertEqual(
             (sorted(additions), sorted(doublings)),
@@ -1469,25 +1301,25 @@ class TestPointDoublingCountInvariance(unittest.TestCase):
     def test_table_less_count_on_nist256p(self):
         self.assert_table_less_count_is_fixed(NIST256p)
         self.assertEqual(
-            self.expected_table_less_multiplication(NIST256p, 4), (72, 257)
+            self.scheduled_table_less_multiplication(NIST256p, 4), (72, 257)
         )
 
     def test_table_less_count_on_secp160r1(self):
         self.assert_table_less_count_is_fixed(SECP160r1)
         self.assertEqual(
-            self.expected_table_less_multiplication(SECP160r1, 4), (48, 161)
+            self.scheduled_table_less_multiplication(SECP160r1, 4), (48, 161)
         )
 
     def test_table_less_count_on_ed25519(self):
         self.assert_table_less_count_is_fixed(Ed25519)
         self.assertEqual(
-            self.expected_table_less_multiplication(Ed25519, 4), (71, 257)
+            self.scheduled_table_less_multiplication(Ed25519, 4), (71, 257)
         )
 
     def test_table_less_count_on_brainpoolp384r1(self):
         self.assert_table_less_count_is_fixed(BRAINPOOLP384r1)
         self.assertEqual(
-            self.expected_table_less_multiplication(BRAINPOOLP384r1, 4),
+            self.scheduled_table_less_multiplication(BRAINPOOLP384r1, 4),
             (104, 385),
         )
 
@@ -1577,17 +1409,14 @@ class TestNarrowOrderHardening(unittest.TestCase):
     )
 
     def group(self, index):
-        """Return the curve, the generator coordinates and the order."""
         prime, a, b, x, y, order = self.GROUPS[index]
         return CurveFp(prime, a, b), x, y, order
 
     def edwards_group(self, index):
-        """Return the curve, the point coordinates and the order."""
         prime, a, d, x, y, order = self.EDWARDS_GROUPS[index]
         return CurveEdTw(prime, a, d, h=4), x, y, order
 
     def edwards_point(self, curve, x, y, order, generator=False):
-        """Return the point of `order`, in the coordinates the class wants."""
         return PointEdwards(
             curve,
             x,
@@ -1617,7 +1446,6 @@ class TestNarrowOrderHardening(unittest.TestCase):
         )
 
     def edwards_reference(self, curve, x, y, order):
-        """Return every multiple of the point, by repeated addition."""
         base = self.edwards_point(curve, x, y, order)
         multiples = [INFINITY]
         while len(multiples) <= order:
@@ -1646,7 +1474,6 @@ class TestNarrowOrderHardening(unittest.TestCase):
         )
 
     def reference(self, curve, x, y, order):
-        """Return every multiple of the generator, by repeated addition."""
         base = PointJacobi(curve, x, y, 1, order)
         multiples = [INFINITY]
         while len(multiples) <= order:
@@ -2139,7 +1966,7 @@ class TestNarrowOrderHardening(unittest.TestCase):
 
 class TestECDHKeyAgreement(unittest.TestCase):
     """
-    The ECDH exposure of the advisory, and the honest limit of this change.
+    The ECDH exposure of the advisory, and what it does not cover.
 
     The advisory names key agreement alongside signing, and the secret there is
     worse than a nonce: it is the long term private key, reused for every
@@ -2182,12 +2009,10 @@ class TestECDHKeyAgreement(unittest.TestCase):
     CURVES = (NIST256p, SECP256k1, BRAINPOOLP384r1, SECP112r2)
 
     def private_key_widths(self, curve):
-        """Bit widths of long term private key to exchange under."""
         top = bit_length(int(curve.order))
         return [width for width in (64, 128, top - 1, top) if 1 < width <= top]
 
     def local_key(self, curve, width):
-        """A signing key whose private scalar is exactly `width` bits wide."""
         return SigningKey.from_secret_exponent(
             (1 << (width - 1)) + 12345, curve=curve
         )
@@ -2219,8 +2044,9 @@ class TestECDHKeyAgreement(unittest.TestCase):
 
         The count asserted is the one of the ladder without a multiplication
         table, because the remote point is not a curve generator and so builds
-        none.  Before this change every width below produced a count of its
-        own, the doubling count being the bit length of the private key.
+        none.  In releases through 0.19.1 every width below produced a
+        count of its own, the doubling count being the bit length of the
+        private key.
         """
         expected = table_less_shape(curve)
         remote = SigningKey.generate(curve=curve).get_verifying_key()
@@ -2247,7 +2073,6 @@ class TestECDHKeyAgreement(unittest.TestCase):
         self.assert_exchange_cost_is_fixed(BRAINPOOLP384r1)
 
     def test_exchange_cost_on_a_curve_whose_cofactor_is_not_one(self):
-        """SECP112r2, the one registered curve of cofactor other than one."""
         self.assertNotEqual(SECP112r2.curve.cofactor(), 1)
         self.assert_exchange_cost_is_fixed(SECP112r2)
 
@@ -2365,7 +2190,6 @@ class TestECDHKeyAgreement(unittest.TestCase):
         self.assertNotEqual(counts[0], counts[1])
 
     def test_both_peers_agree_on_the_secret(self):
-        """The exchange still computes what it computed before."""
         for curve in self.CURVES:
             first = SigningKey.generate(curve=curve)
             second = SigningKey.generate(curve=curve)
@@ -2406,7 +2230,7 @@ class TestECDHKeyAgreement(unittest.TestCase):
 
 class TestSignedDigitSymmetry(unittest.TestCase):
     """
-    The sign of a digit costs the same as its absence of one (Defect #7).
+    The sign of a digit costs the same as its absence of one.
 
     The recoding of a multiplier emits signed digits, and a negative one asks
     the ladder for the negation of the table entry it selected -- one field wide
@@ -2434,7 +2258,6 @@ class TestSignedDigitSymmetry(unittest.TestCase):
     CURVES = (NIST256p, BRAINPOOLP384r1, SECP160r1, Ed25519)
 
     def scalars(self, order):
-        """Multipliers spanning the edges and every width in between."""
         order = int(order)
         scalars = [1, 2, 3, 12345, order - 1, order - 7, order // 3]
         for width in stratified_widths(order):
@@ -2499,7 +2322,6 @@ class TestSignedDigitSymmetry(unittest.TestCase):
         self.assert_negations_are_constant(SECP160r1, False)
 
     def test_negations_are_constant_on_ed25519(self):
-        """Two negations per digit, not one, on this curve type."""
         self.assert_negations_are_constant(Ed25519, True)
         self.assert_negations_are_constant(Ed25519, False)
 
@@ -2557,10 +2379,10 @@ class TestFixedDigitRecoding(unittest.TestCase):
     `AbstractPoint._fixed_digits()` re-expresses a multiplier as a fixed length
     sequence of signed digits, none of which is zero.  Both halves of that
     matter: the fixed length is what stops the number of iterations of a ladder
-    following the multiplier (Defect #3) and the absence of a zero digit is
-    what stops the number of additions following its Hamming weight (Defect
-    #2), since a ladder can then add one table entry per digit unconditionally
-    instead of adding one only when the digit is not zero.
+    following the multiplier and the absence of a zero digit is what stops
+    the number of additions following its Hamming weight, since a ladder can
+    then add one table entry per digit unconditionally instead of adding one
+    only when the digit is not zero.
 
     `AbstractPoint._naf()`, the recoding this one is added next to rather than
     in place of, is asserted to be untouched: `mul_add()` still uses it, and
@@ -2587,7 +2409,6 @@ class TestFixedDigitRecoding(unittest.TestCase):
         )
 
     def multipliers_of_every_width(self, order):
-        """Multipliers spanning every width a nonce of this curve can have."""
         order = int(order)
         scalars = [0, 1, 2, order - 1, order, order + 1, 2 * order]
         for width in stratified_widths(order):
@@ -2595,7 +2416,6 @@ class TestFixedDigitRecoding(unittest.TestCase):
         return scalars
 
     def test_no_digit_is_ever_zero(self):
-        """The property the addition count of a ladder rests on."""
         for curve in self.CURVES:
             order = int(curve.order)
             for scalar in self.multipliers_of_every_width(order):
@@ -2849,7 +2669,6 @@ class TestFixedDigitRecoding(unittest.TestCase):
     @settings(**NO_OLD_SETTINGS)
     @given(st.integers(min_value=0, max_value=int(NIST256p.order) * 3))
     def test_the_recoding_of_an_arbitrary_multiplier(self, multiplicand):
-        """Every property above, over multipliers Hypothesis picks."""
         order = int(NIST256p.order)
         window = ellipticcurve._MUL_WINDOW
         count = PointJacobi._fixed_digit_count(order, window)
@@ -2867,7 +2686,7 @@ class TestFixedDigitRecoding(unittest.TestCase):
 
 class TestCanonicalScalar(unittest.TestCase):
     """
-    Normalising a multiplier before any work is chosen from it (Defect #1).
+    Normalising a multiplier before any work is chosen from it.
 
     `AbstractPoint._canonical_scalar()` replaces a multiplier with the one odd
     number congruent to it modulo the order that lies between the order and
@@ -2920,7 +2739,6 @@ class TestCanonicalScalar(unittest.TestCase):
     )
 
     def multipliers(self, order):
-        """Multipliers spanning the edges and every width in between."""
         order = int(order)
         scalars = [0, 1, 2, 3, order - 2, order - 1, order, order + 1]
         scalars.extend([2 * order, 2 * order + 1, 3 * order - 1])
@@ -3109,7 +2927,6 @@ class TestCanonicalScalar(unittest.TestCase):
             )
 
     def test_the_normalised_multiplier_is_odd_and_bounded(self):
-        """Odd, and between the order and three times it."""
         for curve in self.CURVES:
             order = int(curve.order)
             for scalar in self.multipliers(order):
@@ -3119,7 +2936,6 @@ class TestCanonicalScalar(unittest.TestCase):
                 self.assertLess(canonical, 3 * order)
 
     def test_the_normalised_multiplier_is_congruent_to_the_original(self):
-        """The property that keeps the product of the multiplication put."""
         for curve in self.CURVES:
             order = int(curve.order)
             for scalar in self.multipliers(order):
@@ -3382,26 +3198,22 @@ class TestCanonicalScalar(unittest.TestCase):
             self.assertEqual(unaffected + point, point * (plain + 1))
 
     def test_the_degenerate_ladder_of_secp256k1(self):
-        """Weierstrass: correct, and one field level doubling more."""
         self.assert_degenerate_ladder(
             SECP256k1, 30, 32, ("_double_with_z_1", 1)
         )
 
     def test_the_degenerate_ladder_of_brainpoolp512r1(self):
-        """The same, on a curve that has two such residues."""
         self.assert_degenerate_ladder(
             BRAINPOOLP512r1, 14, 16, ("_double_with_z_1", 1)
         )
 
     def test_the_degenerate_ladder_of_nist256p(self):
-        """The same, where the residue sits just below the order."""
         order = int(NIST256p.order)
         self.assert_degenerate_ladder(
             NIST256p, order - 6, order - 4, ("_double_with_z_1", 1)
         )
 
     def test_the_degenerate_ladder_of_ed25519(self):
-        """Edwards: correct, and one counted doubling more."""
         self.assert_degenerate_ladder(Ed25519, 6, 8, ("_double", 1))
 
     def test_no_registered_curve_leaves_secp160r1_a_degenerate_residue(self):
@@ -3481,7 +3293,6 @@ class TestCanonicalScalar(unittest.TestCase):
     @settings(**NO_OLD_SETTINGS)
     @given(st.integers(min_value=0, max_value=int(NIST256p.order) * 5))
     def test_normalising_an_arbitrary_multiplier(self, multiplicand):
-        """Every property above, over multipliers Hypothesis picks."""
         order = int(NIST256p.order)
         canonical = canonical_scalar(multiplicand, order)
 
@@ -3500,7 +3311,6 @@ class TestCanonicalScalar(unittest.TestCase):
     def test_multiplying_by_an_arbitrary_normalised_multiplier(
         self, multiplicand
     ):
-        """The point identity, over multipliers Hypothesis picks."""
         order = int(SECP160r1.order)
         generator = warm_generator(SECP160r1)
         product = generator * multiplicand
@@ -3514,7 +3324,7 @@ class TestCanonicalScalar(unittest.TestCase):
 
 class TestNonceUnpaddingRegression(unittest.TestCase):
     """
-    The padding a lower layer used to undo (Defect #1).
+    The nonce-unpadding regression: the padding a lower layer used to undo.
 
     Releases up to 0.19.1 hid the width of the nonce in
     `ecdsa.ecdsa.Private_key.sign()`: they added the order to it, and the order
@@ -3760,7 +3570,6 @@ class TestNonceUnpaddingRegression(unittest.TestCase):
         self.assertEqual(sorted(counts), [digits])
 
     def test_a_narrow_and_a_wide_nonce_cost_the_same_on_secp160r1(self):
-        """SECP160r1, where the old padding was cancelled almost always."""
         self.assert_a_narrow_and_a_wide_nonce_cost_the_same(SECP160r1)
 
     def test_a_narrow_and_a_wide_nonce_cost_the_same_on_brainpoolp256r1(self):
@@ -3855,7 +3664,6 @@ class TestEdwardsRawScalarRegression(unittest.TestCase):
     )
 
     def naf_weight(self, value):
-        """Additions the ladder up to 0.19.1 would have spent on `value`."""
         return sum(1 for digit in PointJacobi._naf(value) if digit)
 
     def test_eddsa_signing_multiplies_by_a_whole_hash(self):
@@ -4098,7 +3906,6 @@ class TestSignatureTransparency(unittest.TestCase):
         return self.SECRET_EXPONENT % int(curve.order)
 
     def signing_key(self, curve):
-        """A signing key over `curve` for the fixed private scalar above."""
         return SigningKey.from_secret_exponent(
             self.secret_for(curve), curve, hashlib.sha256
         )
@@ -4178,7 +3985,6 @@ class TestSignatureTransparency(unittest.TestCase):
             self.assertEqual(len(signatures), 1)
 
     def test_a_signature_with_an_explicit_nonce_matches_the_old_tree(self):
-        """The captured bytes for a nonce handed in by the caller."""
         key = self.signing_key(NIST256p)
         signature = key.sign_digest(self.DIGEST, k=self.EXPLICIT_NONCE)
 
@@ -4555,7 +4361,6 @@ class TestBlindedInversion(unittest.TestCase):
         )
 
     def composite_signature(self, private_key):
-        """Sign the fixed message with the fixed nonce on that key."""
         return private_key.sign(self.COMPOSITE_MESSAGE, self.COMPOSITE_NONCE)
 
     def drawn_factors(self, order, count):
@@ -4933,40 +4738,53 @@ class TestBlindedInversion(unittest.TestCase):
         """
         The property a factor computed from the key and the nonce would lose.
 
-        Nothing is stood in for here except the recording of the inversion: the
-        real source draws the real factor, the same key signs the same message
-        with the same nonce eight times over, and what the inversion modulo the
-        order was handed is collected from each of them.  Every one of the eight
-        operands has to be a different value, and none of them may be the nonce.
+        The same key signs the same message with the same nonce eight times
+        over, the source hands each signature a different prepared factor, and
+        the operand the inversion modulo the order was handed is collected from
+        each of them.  The eight operands have to be exactly the eight products
+        of those factors with the nonce, reduced modulo the order.
 
         This is the assertion that makes the blinding a countermeasure.  A
-        repeatable factor -- one derived from the key and the nonce, say -- gives
-        the same operand every time, so the loop that inverts it walks the same
-        path every time, so an attacker who can ask for the same signature
+        repeatable factor -- one derived from the key and the nonce, say --
+        gives the same operand every time, so the loop that inverts it walks the
+        same path every time, so an attacker who can ask for the same signature
         repeatedly averages the measurement noise away and is left with a time
-        that follows the secret after all.  Eight distinct operands mean there is
-        no such path to average.  The eight signatures are identical all the
-        same, which is what the freshness costs the caller: nothing.
+        that follows the secret after all.  The factors are prepared rather than
+        drawn from the real source, so what is asserted is a list of values this
+        test names, and a run of it neither depends on nor reports luck.  The
+        eight signatures are identical all the same, which is what the freshness
+        costs the caller: nothing.
         """
         order = int(NIST256p.order)
         private_key = self.private_key()
         nonce = self.NONCE % order
         rounds = 8
+        offer, asked, factors = self.drawn_factors(order, rounds)
+        expected = [factor * nonce % order for factor in factors]
 
         seen = []
         signatures = []
-        for _ in range(rounds):
-            signature, operands = self.operands_of(
-                lambda: private_key.sign(self.MESSAGE, nonce), order
-            )
-            self.assertEqual(len(operands), 1)
-            seen.append(operands[0])
-            signatures.append((signature.r, signature.s))
+        original = ecdsa_module.randrange
+        ecdsa_module.randrange = offer
+        try:
+            for _ in range(rounds):
+                signature, operands = self.operands_of(
+                    lambda: private_key.sign(self.MESSAGE, nonce), order
+                )
+                self.assertEqual(len(operands), 1)
+                seen.append(operands[0])
+                signatures.append((signature.r, signature.s))
+        finally:
+            ecdsa_module.randrange = original
 
-        self.assertEqual(len(seen), rounds)
-        # a fresh factor per signature, so a fresh operand per signature
+        self.assertIs(ecdsa_module.randrange, original)
+        # one draw of the order of the generator per signature, and the operand
+        # each of the factors so drawn leads to, named rather than counted
+        self.assertEqual(asked, [order] * rounds)
+        self.assertEqual(seen, expected)
+        # eight operands that differ, and none of them the nonce, which is what
+        # releases up to 0.19.1 inverted
         self.assertEqual(len(set(seen)), rounds)
-        # and never the nonce itself, which is what was inverted before
         self.assertNotIn(nonce, seen)
         for operand in seen:
             self.assertTrue(1 <= operand < order)
@@ -5252,7 +5070,6 @@ class TestEdgeCasePreservation(unittest.TestCase):
         )
 
     def test_a_multiplier_of_zero_gives_the_point_at_infinity(self):
-        """Through the ladder on a hardened point, through a guard otherwise."""
         for curve in self.EDGE_CURVES:
             for label, point in self.points_of(curve):
                 self.assertIs(point * 0, INFINITY, label)
@@ -5332,7 +5149,6 @@ class TestEdgeCasePreservation(unittest.TestCase):
                 self.assertRaises(TypeError, point.__mul__, None)
 
     def test_a_multiplier_of_true_is_answered_like_a_one(self):
-        """A boolean is an integer, so it is answered as the one it stands."""
         for curve in self.EDGE_CURVES:
             for label, point in self.points_of(curve):
                 self.assertEqual(point * True, point, label)
@@ -5379,7 +5195,6 @@ class TestEdgeCasePreservation(unittest.TestCase):
                 self.assertEqual(sorted(counted), [expected], label)
 
     def test_the_point_at_infinity_stays_the_point_at_infinity(self):
-        """Whatever it is multiplied by, including values it never reads."""
         order = int(NIST256p.order)
         for scalar in (0, 1, 2, 7, order, order - 1, -5):
             self.assertIs(INFINITY * scalar, INFINITY)
@@ -5702,7 +5517,6 @@ class TestMultiplierNormalisation(unittest.TestCase):
                 )
 
     def test_a_multiplication_refuses_a_malformed_lossless_integer(self):
-        """Reached through the operator, on every shape of point."""
         points = (
             warm_generator(NIST256p),
             rebuilt_generator(NIST256p, False),
@@ -5732,7 +5546,6 @@ class TestMultiplierNormalisation(unittest.TestCase):
                 )
 
     def test_the_refusal_names_the_type_it_refused(self):
-        """The three type names both Python 2 and Python 3 spell alike."""
         for value, name in ((1.5, "float"), ("3", "str"), (None, "NoneType")):
             try:
                 PointJacobi._integer_multiplier(value)

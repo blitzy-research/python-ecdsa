@@ -23,9 +23,12 @@ and as a teaching tool.
 **This library does not protect against side-channel attacks in general, and makes no
 constant-time guarantee for any operation.** One reported timing side channel has been
 narrowed, and only that one: the number of elliptic curve point operations that signing,
-key generation and EdDSA signing perform no longer follows the secret they are performed
-with, and the same holds of an ECDH exchange where the remote point carries an order.
-What that does and does not cover is set out below; read it before relying on it.
+key generation and EdDSA signing schedule is now fixed by the public order of the curve
+rather than by the secret they are performed with, and the same holds of an ECDH exchange
+where the remote point carries an order. One rare exception survives on the Edwards curves,
+where at most two multipliers per order cost a single doubling beyond that schedule. It is
+described below, together with what the change does and does not cover; read that before
+relying on any of it.
 
 Do not allow attackers to measure how long it takes you to generate a key pair or sign a message.
 Do not allow attackers to run code on the same physical machine when key pair generation or
@@ -35,8 +38,8 @@ or signing a message. Do not allow attackers to measure RF interference coming f
 while generating a key pair or signing a message. Note: just loading the private key will cause
 key pair generation. Other operations or attack vectors may also be vulnerable to attacks. 
 Against the power analysis, RF and same-machine attacks in that list this library implements no
-countermeasure whatsoever, and for a sophisticated attacker observing just one operation with a
-private key over one of those channels will be sufficient to completely reconstruct the private key.
+countermeasure whatsoever. Some local physical or microarchitectural attacks may recover key
+material from very few observations; this library provides no protection against them.
 
 Side-channel resistance is not a design goal of this library, no operation of it is claimed to be
 constant time, and complete resistance to attacks of this class remains out of scope for a
@@ -80,8 +83,10 @@ measurably faster; verification without a precomputed key is untouched and uncha
 **What has changed.** Where a point knows an order the recoding can use -- which is every curve
 this library registers -- the multiplier is reduced to the one odd representative of it that lies
 between that order and three times it, and recoded into a fixed length sequence of digits none of
-which is zero, so how many point additions and point doublings a multiplication performs are derived
-from that (public) order and from nothing else. That the representative is never smaller than the
+which is zero, so how many point additions and point doublings a multiplication schedules are
+derived from that (public) order and from nothing else. Scheduled work is the whole cost of every
+multiplier but the at most two per order that a twisted Edwards ladder answers with one doubling
+more, set out with the other bounds below. That the representative is never smaller than the
 order matters on its own: a Python integer costs what its width costs, so a normalisation that left
 a short nonce short would have kept the bit length of the nonce in the cost of recoding it and of
 every shift the ladder performs, even with the number of operations already fixed. The width of that
@@ -129,8 +134,8 @@ The resulting count is fixed per code path, and is not one number for the whole 
   performs one operation more than every other multiplier does. Removing it would mean giving every
   multiplication an unconditional extra doubling, which is a worse trade than recording it;
 * a point whose order the recoding cannot use keeps the older multiplication, whose cost follows
-  its multiplier. There are exactly three such orders and a test enumerates them: no order at all,
-  an even order, and an order smaller than 17. The last two are consequences of the mechanism
+  its multiplier. The fixed ladder is unavailable in three cases, and a test enumerates them: the
+  order is absent, even, or below 17. The last two are consequences of the mechanism
   rather than choices. An even order has no odd representative for the multiplier to be reduced to,
   since adding an even number to a residue cannot change its parity; and an order below 17 cannot
   be recoded at all, because one of the eight odd multiples of the point that a digit position
@@ -139,7 +144,7 @@ The resulting count is fixed per code path, and is not one number for the whole 
   declares an odd order of at least 110 bits, so neither of those two reaches a registered curve --
   a recoding narrow enough to be two digits wide covers orders 17 to 63, and only a group a caller
   assembles themselves can be that small;
-* the first of those three, a point with no order, is where the honest limit of this change lies. A
+* the first of those three, a point with no order, is the remaining limitation of this change. A
   public point decoded from an encoding carries no order: `VerifyingKey.from_string()` builds it
   from coordinates alone and nothing attaches the order of the curve to it. An ECDH exchange against
   a peer key that arrived over the wire therefore multiplies the long-term private key on the older
@@ -158,19 +163,26 @@ The resulting count is fixed per code path, and is not one number for the whole 
 signature as before, byte for byte, what the multiplication adds to a multiplier being a multiple
 of the order of the point, and RFC 6979 deterministic signatures remain reproducible byte for
 byte. Public call signatures, key encodings and signature encodings are unchanged, and no public
-return type changed. The state a point writes when it is pickled is unchanged as well: it is the
-plain instance dictionary, precomputation table and all, exactly what every release up to 0.19.1
-wrote, so the format itself did not move. A point unpickled with a precomputation table an earlier
-release wrote is still accepted, that table being recognised as one of another layout, discarded and
-lazily rebuilt. The opposite direction is not guarded and cannot be: a state written by this code
+return type changed. The container a point writes when it is pickled is unchanged: it is the plain
+instance dictionary, precomputation table and all, exactly what every release up to 0.19.1 wrote,
+so no reader has to learn a new format. Its contents are not unchanged -- the precomputation table
+inside it now holds, for each digit position, the odd multiples of the point a whole window can
+select, where earlier releases cached successive doublings -- so compatibility runs one way only. A
+point unpickled with a precomputation table an earlier release wrote is accepted, that table being
+recognised as one of another layout, discarded and lazily rebuilt. The opposite direction is not
+guarded and cannot be: a state written by this code
 and read by a release older than the countermeasure hands that release a table of the new layout
 to index as the successive doublings it expects, and it has no check that would notice, so it
 would answer with a wrong point rather than raise. That residual is accepted. It is inherent to
 changing the layout of a cache that a serialised point has always carried, and the alternative --
 leaving the table out of the state -- would change the format for every reader instead of for none.
 
-One thing a caller can observe did change, and it is the only one. A multiplier that is not an
-integer is refused with a `TypeError` naming its type: `multiplier must be an integer, not str`, and
+Three things did change that a caller can observe or depend on, and this is the whole list: the
+layout of the precomputation table inside a pickled point, described just above; the refusal of a
+multiplier that is not an integer, described next; and the entropy read and the `RuntimeError`
+that can come with it, described after that.
+
+A multiplier that is not an integer is refused with a `TypeError` naming its type: `multiplier must be an integer, not str`, and
 so on for every other type. Each multiplication now asks the value for its integer through
 `operator.index()` before it does anything else, which takes `int`, `bool` and the `mpz` of both
 gmpy releases losslessly and refuses everything else, where releases up to 0.19.1 answered each such
@@ -179,15 +191,17 @@ each shape of point. A `str` or a `list` raised a `TypeError` from the reduction
 multiplication, carrying a message about string formatting or about the `%` operator that said
 nothing of multiplication. A `None` was read as a zero and answered with the point at infinity on
 the Jacobi and Edwards paths, and raised from that same reduction on the affine one. A `float` was
-worse than either: on the Jacobi and Edwards paths it was accepted in silence and answered with the
-point for some other integer -- 3.0, 3.5 and 3.9 all answering with three times the point while 2.5
-answered with one times it -- and only the affine path raised. Refusing it is the one of those
-answers that cannot be a wrong point. The refusal is deliberate rather than incidental: the shortcut
+worse than either, and worse in a different way on each path. The Jacobi path took any of them in
+silence and answered with the point for some other integer: 3.0, 3.5 and 3.9 all gave three times
+the point, and 2.5 gave one times it. The Edwards path took one with no fractional part the same
+way and raised a bare `AssertionError` for the rest. The affine path raised a `TypeError` for most
+of them, but answered 0.5 with one times the point. Refusing the type outright is the one answer
+that cannot be a wrong point. The refusal is deliberate rather than incidental: the shortcut
 that answers a multiplier of one had to move behind that normalising step, or a nonce of one would
 never reach a ladder at all, and a value that is not an integer cannot be normalised without
 guessing what its caller meant.
 
-One further behaviour changed without being visible in the output. Signing draws one factor to blind
+The third of those changes is not visible in the output at all. Signing draws one factor to blind
 the modular inversion per signature and reads `os.urandom()` at least once to obtain it -- the
 rejection sampling of `util.randrange()` reads it again for every draw it discards, and a factor
 that is not invertible modulo a composite generator order is drawn again as well -- so it reads
@@ -226,9 +240,11 @@ wrapper around a hardened native implementation such as
 part of the normal test suite. `minerva_probe.py`, in the repository root, measures the wall clock
 signal that remains: it times signatures, groups them by the bit length of the nonce that produced
 each one, and applies the statistical battery the external `tlsfuzzer` harness applies to the same
-question. It tests the configured `PREFIX_SIZES` and reports the earliest configured prefix at
-which a test rejects; this brackets the true threshold from above rather than finding the exact
-minimum. It is opt-in and is deliberately not part of the default test run or of CI, a statistical
+question. It tests the configured `PREFIX_SIZES` and reports the earliest rejecting configured
+prefix, or that no rejection occurred at the tested prefixes through the largest of them. That is
+an observation about the prefixes tested and nothing more: no threshold is inferred, and nothing is
+claimed about the sample counts between two of them. It is opt-in and is deliberately not part of
+the default test run or of CI, a statistical
 timing measurement being unusable as a pass/fail gate:
 
 ```

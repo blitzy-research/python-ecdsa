@@ -336,19 +336,9 @@ class TestPoint(unittest.TestCase):
         self.assertIs(self.p192 * 0, INFINITY)
 
     def test_mul_by_one_with_order(self):
-        # the ladder for the small order, the delegation for the large one,
-        # and both have to answer with this very object -- the delegation after
-        # it has done the work every other multiplier pays for, see
-        # `PointJacobi.__mul__()`.
-        #
-        # Handing back the multiplied object itself is what the X9.62 D.3.2
-        # ladder of every release up to 0.19.1 did for this multiplier: its
-        # loop bound leaves the accumulator at the `result = self` it was
-        # initialised with, so the object that comes back is the object that
-        # went in.  That ladder is still in this module and still does it,
-        # which `test_mul_by_one_without_order` below measures on the one path
-        # that reaches it, so an implementation that answered this multiplier
-        # with an equal but distinct point would be a change a caller can see.
+        # Handing back the multiplied object itself is what every release up to
+        # 0.19.1 did for this multiplier, so answering with an equal but
+        # distinct point would be a change a caller can see.
         small = self.g_23 * 1
         self.assertEqual((small.x(), small.y()), (13, 7))
         large = self.p192 * 1
@@ -357,14 +347,6 @@ class TestPoint(unittest.TestCase):
         self.assertIs(large, self.p192)
 
     def test_mul_by_one_keeps_the_order_the_point_knows(self):
-        # A separate claim from the one above, and kept in a method of its own
-        # rather than folded into it: the product of this multiplier is the
-        # multiplied object itself, so it reports the order that object was
-        # built with, which a point built from coordinates alone would not
-        # carry.  What it guards is that neither the shortcut nor the
-        # delegation hands back a copy that has lost the order -- a point
-        # without one takes a different ladder, so losing it here would move
-        # the work every later multiplication of that product does.
         small = self.g_23 * 1
         large = self.p192 * 1
 
@@ -683,14 +665,9 @@ class TestAffineMultiplicationCost(unittest.TestCase):
         above measures, and a point that cannot use its order does not reach
         it.  The number of point operations that ladder performs follows the
         multiplier, so it is not side channel hardened; it is kept as it is
-        because a point without an order still has to multiply, and a caller
-        who builds one through the public constructors of this module and
-        multiplies it gets that unhardened ladder.  What the countermeasure
-        rests on is narrower: every curve this library registers declares an
-        order the recoding can use, and `ecdsa.ecdsa.Public_key` attaches it
-        to the public points that arrive without one, so no route through the
-        signing, key generation and ECDH paths of this library multiplies a
-        point without a usable order by a secret.
+        because a point without an order still has to multiply.  Signing and
+        key generation use ordered generators; ECDH with a decoded peer key
+        remains the documented orderless secret-bearing exception.
         """
         order_less = Point(self.c192, Gx, Gy)
         for multiplier in (1, 2, 0xDEADBEEF12345678):
