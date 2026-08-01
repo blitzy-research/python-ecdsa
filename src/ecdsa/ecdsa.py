@@ -68,7 +68,7 @@ import warnings
 from six import int2byte
 from . import ellipticcurve
 from . import numbertheory
-from .util import bit_length
+from .util import randrange
 from ._compat import remove_whitespace
 
 
@@ -243,28 +243,73 @@ class Private_key(object):
         of this comment.
 
         May raise RuntimeError, in which case retrying with a new
-        random value k is in order.
+        random value k is in order.  A RuntimeError also reports a refusal of
+        the entropy source that the blinding of the modular inversion below
+        draws from, whether or not `random_k` was supplied by the caller; that
+        one is not fixed by retrying.
         """
 
         G = self.public_key.generator
         n = G.order()
         k = random_k % n
-        # Fix the bit-length of the random nonce,
-        # so that it doesn't leak via timing.
-        # This does not change that ks = k mod n
-        ks = k + n
-        kt = ks + n
-        if bit_length(ks) == bit_length(n):
-            p1 = kt * G
-        else:
-            p1 = ks * G
+        # The nonce is handed to the scalar multiplication as it is: keeping
+        # its width out of the number of point operations is the job of the
+        # arithmetic layer.  `Public_key` refuses a generator without an order,
+        # so `G` always carries one, which is what lets that layer normalise
+        # the multiplier -- and what it makes uniform is the number of point
+        # operations, not the width of the multiplier it drives its ladder
+        # with.  What it adds to the nonce is a multiple of the order of `G`,
+        # which leaves the point -- and with it `r` and `s` -- exactly as it
+        # is, since the order of a point times that point is the point at
+        # infinity.
+        p1 = k * G
         r = p1.x() % n
         if r == 0:
             raise RSZeroError("amazingly unlucky random number r")
-        s = (
-            numbertheory.inverse_mod(k, n)
-            * (hash + (self.secret_multiplier * r) % n)
-        ) % n
+        # Blind the nonce before inverting it: two of the four
+        # `numbertheory.inverse_mod()` implementations run an extended Euclid
+        # loop whose number of iterations follows its argument, and `b` is
+        # drawn afresh for every signature, so what is inverted is unrelated
+        # to the nonce.  The blinding cancels exactly, as
+        # `inverse_mod(b * k % n, n) * b % n == inverse_mod(k, n)` for every
+        # `k` invertible modulo `n`, so `s` is unchanged; and every
+        # `inverse_mod()` maps zero to zero, so `sinv` is zero on exactly the
+        # inputs the unblinded inverse was.  This is not constant time.
+        #
+        # The factor has to be invertible modulo `n` for the blinding to
+        # cancel, which `randrange()` alone does not give: the generator order
+        # of a curve built by hand can be composite, and a factor sharing a
+        # divisor with it would make `inverse_mod()` raise for a nonce that
+        # signs perfectly well unblinded.  Draw again until the factor is
+        # coprime with `n` -- a rejection that depends only on freshly drawn
+        # randomness and never on the nonce.  Every curve this library
+        # registers has a prime generator order, so the first draw is always
+        # accepted there.  With the factor invertible, `b * k % n` shares its
+        # divisors with `n` exactly as `k` does, so this raises on the same
+        # nonces the unblinded inverse raised on and on no others.
+        #
+        # Drawing the factor makes this method depend on the entropy source
+        # for the first time, including when the caller supplied `random_k`
+        # itself.  A refusal is translated to the `RuntimeError` this method
+        # has always documented, rather than allowed out as the `OSError` of
+        # the entropy source: `keys.SigningKey.sign_digest_deterministic()`
+        # retries `RSZeroError` only, so raising that here would loop forever,
+        # and falling back to an unblinded inversion would let whoever can
+        # exhaust the entropy source turn the countermeasure off.
+        try:
+            b = randrange(n)
+            while numbertheory.gcd(b, n) != 1:
+                b = randrange(n)
+        except (EnvironmentError, NotImplementedError) as e:
+            # EnvironmentError is OSError on Python 3 and covers OSError and
+            # IOError on Python 2; NotImplementedError is what Python 2's
+            # os.urandom raises when it has no source at all
+            raise RuntimeError(
+                "cannot blind the modular inversion of the nonce, the "
+                "entropy source failed: %s" % (e,)
+            )
+        sinv = numbertheory.inverse_mod(b * k % n, n) * b % n
+        s = (sinv * (hash + (self.secret_multiplier * r) % n)) % n
         if s == 0:
             raise RSZeroError("amazingly unlucky random number s")
         return Signature(r, s)

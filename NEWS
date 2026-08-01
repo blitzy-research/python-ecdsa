@@ -1,3 +1,212 @@
+* Unreleased
+
+Hardening:
+* Scalar multiplication no longer performs a number of point
+  operations that follows the multiplier: how many point additions and
+  doublings signing, key generation and EdDSA signing perform is now
+  derived from the order of the curve alone, as are those of an ECDH
+  exchange whose remote point carries an order. This narrows the
+  Minerva class timing side channel of CVE-2024-23342
+  (GHSA-wj6h-64fc-37mp, PYSEC-2026-1325), where the time a signature
+  took followed the bit length of the per-signature nonce. A
+  multiplier is reduced to the one odd representative of it that lies
+  between that order and three times it, and recoded into a fixed
+  length sequence of digits none of which is zero, so no digit is
+  skipped and no iteration is spared. The representative is never
+  smaller than the order, which takes the bit length of the nonce out
+  of the cost of the arithmetic driving the ladder; its own width is
+  not a constant and is not claimed to be one, running from the bit
+  length of the order to that of three times the order less two, a
+  band that on every registered curve falls inside one CPython integer
+  size. The count is fixed per code path rather than being one number
+  for the whole library: once a generator has built its precomputation
+  table, which the first multiplication pays for, NIST256p signing and
+  key generation perform 65 point additions and no doublings at all,
+  where the old ladder ran over dozens of distinct counts, from about
+  twenty additions for a nonce a quarter of the full width to about
+  ninety for a full width one; building that table, and multiplying a
+  point that has no table as ECDH does, each settle on a fixed count
+  of their own; and known order affine multiplication delegates to the
+  hardened path. EdDSA signing got the same treatment, on a count of
+  its own for each of the Edwards curves. Verification, whose
+  multipliers are public as soon as the signature is, was never
+  affected and has deliberately been left alone: its combined
+  multiplication is unchanged statement for statement, as are the
+  addition and doubling formulas beneath it. It has always split into
+  two separate multiplications where both of its points carry a
+  precomputation table, so verification with a key ``precompute()`` was
+  called on does now take the hardened ladder, reaching the same point
+  from the same public multipliers; verification without one is
+  untouched.
+* The nonce bit size hiding added in 0.14 was incomplete and this
+  replaces it. The padding it applied when signing was taken off again
+  by the reduction modulo twice the order of the curve that the
+  multiplication performed, so it was without effect for a fraction of
+  the nonces that depended on the curve: all but a vanishing fraction of
+  them on SECP160r1, four in five on BRAINPOOLP384r1, one in two on
+  BRAINPOOLP256r1. What the old ladder leaked besides was the Hamming
+  weight of the NAF recoding of the multiplier, since it skipped an
+  addition on every zero digit. The hiding now lives in the arithmetic
+  alone, with nothing above it left to cancel it.
+* EdDSA was exposed by a plainer route. That padding was applied in
+  ``ecdsa.ecdsa.Private_key.sign()`` and nowhere else, and EdDSA never
+  went through it: ``ecdsa.eddsa.PrivateKey.sign()`` multiplies the
+  generator by a whole hash, 64 bytes of it on Ed25519 and 114 on Ed448,
+  and the old multiplication reduced that modulo twice the order and
+  then spent a number of point operations that followed the width and
+  the NAF weight of what the reduction left, so there was no
+  countermeasure there to cancel in the first place. Recovering that
+  value discloses the private scalar, an EdDSA signature carrying
+  ``r + H(R, A, M) * s``. Both Edwards curves now go through the same
+  normalisation and recoding as the rest, 64 additions and no doublings
+  per signature on Ed25519 once its generator has its table, where the
+  old ladder ran from about twenty additions to about ninety over the
+  widths a hash covers.
+* The modular inversion of the nonce is performed on a blinded value and
+  unblinded afterwards, so the iterations it takes no longer follow the
+  nonce. The factor is drawn afresh for every signature, so what is
+  inverted is unrelated to the nonce. That makes signing read from
+  ``os.urandom()`` where it did not before, namely when the caller
+  supplied the nonce and when the nonce is the deterministic one of
+  RFC 6979; the draw is separate from the ``entropy=`` argument, which
+  still feeds nonce generation only. It does not reach the signature,
+  the blinding cancelling exactly, and a refusal of the entropy source
+  is reported as the ``RuntimeError`` ``Private_key.sign()`` has always
+  documented rather than by dropping the blinding.
+* ECDSA signing through every entry point, key generation and EdDSA
+  signing are covered on every registered curve, all of them
+  multiplying the generator of the curve, which carries its order. An
+  ECDH exchange is covered where the remote point carries an order,
+  which a public key this process derived from a ``SigningKey`` does; a
+  public key decoded from an encoding carries none, ``from_string()``
+  building it from coordinates alone, so an exchange against a peer key
+  that arrived over the wire keeps the older ladder and its doubling
+  count is still the bit length of the private key. That is the limit of
+  this change and ``SECURITY.md`` states it with the measured numbers.
+* Please note that this DOES NOT make the library secure against
+  side-channel attacks (timing attacks); it is not a constant time
+  implementation and is not claimed to be one. A residual timing
+  signal remains, since Python integers are variable width and cost
+  more to work with as they grow and the field arithmetic defers some
+  reductions on purpose, so individual operations still differ in
+  duration where their number no longer does, and nothing stronger
+  than a measured reduction is attainable in pure Python. Power
+  analysis, electromagnetic emanation and cache or other
+  microarchitectural channels are not addressed at all. A point whose
+  order the recoding cannot use keeps the multiplication earlier
+  releases performed, and there are exactly three such orders: no
+  order at all, an even order, and an order smaller than 17. The last
+  two follow from the mechanism rather than being choices -- an even
+  order has no odd representative to reduce to, and below 17 one of
+  the eight odd multiples a digit position indexes would be the point
+  at infinity, which an affine table entry cannot hold -- and every
+  registered curve declares an odd order of at least 110 bits, so
+  neither reaches one. One more residual is recorded rather than
+  removed: at most two residues of any order end a ladder with its
+  accumulator equal to the entry being added, which a twisted Edwards
+  ladder pays for with one extra doubling, so a nonce landing on one
+  of them costs an operation more than every other -- seven registered
+  curves have two such residues, eighteen have one and SECP160r1 has
+  none, a chance of about 2**-255 on a 256-bit curve. This is local
+  hardening only and creates no upstream patched version marker: no
+  release is recorded anywhere as fixing CVE-2024-23342, the advisory
+  listing every version as affected and none as patched, so a
+  vulnerability scanner will keep reporting it. ``SECURITY.md`` has
+  the full statement.
+
+Compatibility:
+* Signatures are bit identical to the ones earlier releases produced,
+  what the multiplication adds to a multiplier being a multiple of the
+  order of the point, and deterministic RFC 6979 signatures stay
+  reproducible byte for byte.
+* Public call signatures, key encodings and signature encodings are
+  unchanged, and no public return type changed.
+* One thing a caller can observe did change, and it is the only one: a
+  multiplier that is not an integer is refused with a ``TypeError``
+  naming its type, ``multiplier must be an integer, not str`` and so
+  on. Every multiplication asks the value for its integer through
+  ``operator.index()`` before it does anything else, which takes
+  ``int``, ``bool`` and the ``mpz`` of both gmpy releases losslessly
+  and refuses everything else; earlier releases answered each such
+  value with whatever the arithmetic made of it, and made something
+  different of it on each shape of point -- a ``str`` or a ``list``
+  raised from the reduction at the top of the multiplication, a
+  ``None`` was read as a zero and answered with the point at infinity,
+  and a ``float`` was accepted in silence and answered with the point
+  for some other integer, 3.0, 3.5 and 3.9 all answering with three
+  times the point while 2.5 answered with one times it. The refusal is
+  deliberate: the shortcut that answers a multiplier of one had to
+  move behind that normalising step, or a nonce of one would never
+  reach a ladder at all.
+* The state a pickled point writes is unchanged, being the plain
+  instance dictionary with the precomputation table in it, exactly what
+  every release up to 0.19.1 wrote, so the format itself did not move. A
+  point unpickled with a table an earlier release wrote is still
+  accepted, that table being recognised as one of another layout,
+  discarded and lazily rebuilt. The opposite direction is not guarded
+  and cannot be: a state written here and read by a release older than
+  the countermeasure hands it a table of the new layout to index as the
+  successive doublings it expects, and it would answer with a wrong
+  point rather than raise. That residual is accepted and recorded in
+  ``SECURITY.md``.
+* Signing draws one blinding factor for the modular inversion per
+  signature and reads ``os.urandom()`` at least once to get it: the
+  rejection sampling of ``util.randrange()`` reads it again for every
+  draw it discards, and a factor that is not invertible modulo a
+  composite generator order is drawn again as well. Earlier releases
+  did not read it at all when the caller supplied the nonce or when
+  the nonce was the deterministic one of RFC 6979. The signature is
+  unaffected, and a refusal of the source raises ``RuntimeError``
+  rather than dropping the blinding.
+
+Performance:
+* Signing is faster, not slower, on every curve: ``speed.py`` reports
+  between 1.21 and 1.40 times the signatures per second, 1.34 times on
+  NIST256p, and verification with a precomputed public key gains
+  between 1.22 and 1.43 times for the same reason, since a combined
+  multiplication delegates to the same ladder when both of its points
+  have a table. Verification without a precomputed key is unchanged
+  within measurement noise, between 0.95 and 1.05 times, being the one
+  multiplication path deliberately left alone. The reason is the
+  operation count itself: a fixed 65 point additions on NIST256p
+  against about 86 on average before, around 330 microseconds against
+  around 450 for uniformly drawn nonces.
+* One caution when benchmarking this: the comparison only means
+  something over uniformly drawn multipliers. A sparse one such as a
+  power of two plus a small number needs only about four additions from
+  the old ladder, which skipped one for every zero digit, so it ran in
+  about 35 microseconds against the 323 the fixed count now costs. That
+  spread between 4 and 86 additions for the same curve is the leak, not
+  a speed to measure against.
+
+Maintenance:
+* New ``src/ecdsa/test_side_channel.py`` holds the point operation
+  counts above to exact numbers, so a regression there is a test
+  failure. It runs as part of the normal test suite.
+* New ``minerva_probe.py``, also reachable as ``tox -e leak``, measures
+  the wall clock signal that remains, stratified by nonce bit length,
+  with the statistical tests the external tlsfuzzer harness applies to
+  the same question. It tests the configured prefix sizes and reports
+  the earliest configured prefix at which it can still detect a
+  dependence, which brackets the true threshold from above rather than
+  finding the exact minimum. It is opt-in and deliberately not part of
+  the default test run or of CI, a statistical timing measurement not
+  being usable as a pass/fail gate. It exits 0 for a usable report, 1 if
+  its own self-check failed, and 2 if it could not produce a report it
+  is willing to stand behind. It certifies nothing.
+* The test suite gained tests and lost none. No test that shipped in
+  0.19.1 was removed, renamed or had a claim of it changed, with one
+  exception which is an addition rather than a change: one line was
+  added to ``test_jacobi.py::TestJacobi::test_precompute``, building
+  the shared generator's multiplication table before the assertion that
+  reads it. That test asserts the table is populated before it
+  multiplies anything, and the generators are shared and build their
+  tables lazily, so whether it passed depended on which tests had run
+  before it: on 0.19.1 it fails when it is run on its own, and it now
+  passes. Every decorator, example and assertion of it is otherwise
+  unchanged.
+
+
 * Release 0.19.1 (13 Mar 2025)
 
 New API:
