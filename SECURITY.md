@@ -283,9 +283,9 @@ cannot be used to switch the countermeasure off.
   none as patched -- so a vulnerability scanner will keep reporting CVE-2024-23342 and
   PYSEC-2026-1325 against this library whether or not the countermeasure is present.
 
-For a sense of scale: the same researchers found the same class of defect in GnuTLS, and after it
-was fixed there, in compiled C, a residual leak of roughly 34 ns was still measurable over about
-43 million observations. If you need more than a measured reduction of one leak, use a quality
+For a sense of scale: the same researchers found the same class of defect in GnuTLS, where the step
+measured roughly 34 ns and took about 43 million observations to establish, in compiled C, before
+it was fixed in 3.8.4. If you need more than a measured reduction of one leak, use a quality
 wrapper around a hardened native implementation such as
 [`pyca/cryptography`](https://cryptography.io/), as suggested above, rather than this library.
 

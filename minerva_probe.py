@@ -42,9 +42,9 @@ variable width and the field arithmetic in ``ellipticcurve.py``
 deliberately defers some reductions, so a residual per-operation signal
 survives any amount of work at the ladder level.  A smaller measured
 signal is a smaller measured signal and nothing more.  For calibration:
-GnuTLS still exposed a residual step of roughly 34 ns after hardening
-compiled C against the same weakness (CVE-2024-28834, fixed in 3.8.4),
-which took 43,190,069 observations to see.
+the same weakness in GnuTLS showed a step of roughly 34 ns in
+compiled C, and took 43,190,069 observations to establish, before
+it was fixed in 3.8.4 (CVE-2024-28834).
 
 Method
 ------
@@ -306,8 +306,8 @@ CALIBRATION_ANCHORS = [
     ),
     (
         43190069,
-        "GnuTLS, after hardening compiled C, to see a residual step "
-        "of about 34 ns (CVE-2024-28834, fixed in 3.8.4)",
+        "GnuTLS, in compiled C, to see a step of about 34 ns before "
+        "it was fixed in 3.8.4 (CVE-2024-28834)",
     ),
 ]
 
@@ -3247,9 +3247,10 @@ def print_anchors():
         print("  {0:>12}  {1}".format(with_commas(count), description))
     print("")
     print(
-        "  the last anchor is the honest one: hardened compiled C still\n"
-        "  leaked, it just took three orders of magnitude more samples\n"
-        "  to see it"
+        "  a leak can need far more samples than you took: the last\n"
+        "  anchor is a real 34 ns step in compiled C, and it took\n"
+        "  three orders of magnitude more observations to establish\n"
+        "  than the first anchor needed here"
     )
 
 
@@ -4932,8 +4933,8 @@ def print_closing(elapsed):
         "  defers some reductions on purpose.  Nothing\n"
         "  above is a claim of constant-time execution.  The reference\n"
         "  point worth remembering is the third calibration anchor --\n"
-        "  hardened compiled C still leaked about 34 ns, and it took\n"
-        "  43,190,069 observations to see."
+        "  a real step of about 34 ns in compiled C took 43,190,069\n"
+        "  observations to establish."
     )
 
 
