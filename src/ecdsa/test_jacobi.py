@@ -1372,11 +1372,12 @@ class TestJacobi(unittest.TestCase):
         # A point that carries no order has no order to bring its multiplier to
         # a canonical width against, so the width comes from the curve, which
         # bounds by Hasse's theorem every order a point of it can have.  Every
-        # multiplier that curve can hold therefore costs one and the same count:
-        # the count of a point that knows its order and one addition more, for
-        # the odd form the multiplier is recoded in and the correction that
-        # brings the product back.  ECDH against a remote public point decoded
-        # from an encoding, which carries no order, is what reaches this.
+        # multiplier that curve can hold therefore costs one and the same
+        # count: the count of a point that knows its order and one addition
+        # more, for the odd form the multiplier is recoded in and the
+        # correction that brings the product back.  ECDH against a remote
+        # public point decoded from an encoding, which carries no order, is
+        # what reaches this.
         point = PointJacobi(
             curve_112r2, generator_112r2.x(), generator_112r2.y(), 1
         )
@@ -1437,11 +1438,12 @@ class TestJacobi(unittest.TestCase):
     def test_which_points_are_recoded_against_their_curve(self):
         # Only a point that knows no order and is not flagged as a curve
         # generator.  A point that knows a usable order is recoded against that
-        # order, a point of an order the recoding cannot use keeps the ladder of
-        # releases up to 0.19.1, and a point flagged as a generator without an
-        # order cannot build the table its flag promises: those releases refused
-        # it and so does this, at the same multipliers and not at the two they
-        # answered ahead of the refusal.  All of it is read from the point.
+        # order, a point of an order the recoding cannot use keeps the ladder
+        # of releases up to 0.19.1, and a point flagged as a generator without
+        # an order cannot build the table its flag promises: those releases
+        # refused it and so does this, at the same multipliers and not at the
+        # two they answered ahead of the refusal.  All of it is read from the
+        # point.
         x, y = generator_256.x(), generator_256.y()
         order = int(generator_256.order())
         cases = (
@@ -1461,10 +1463,11 @@ class TestJacobi(unittest.TestCase):
 
     def test_the_parity_correction_costs_the_same_either_way(self):
         # A point that knows no order is multiplied by the odd form of its
-        # multiplier, and this point is subtracted from that product; the parity
-        # of the multiplier picks one of the two answers out by index rather than
-        # by branch, so both parities cost the same pair.  The products are
-        # asserted as well, so this covers the correction and not only its cost.
+        # multiplier, and this point is subtracted from that product; the
+        # parity of the multiplier picks one of the two answers out by index
+        # rather than by branch, so both parities cost the same pair.  The
+        # products are asserted as well, so this covers the correction and not
+        # only its cost.
         point = PointJacobi(curve_256, generator_256.x(), generator_256.y(), 1)
 
         counts = []
@@ -1501,9 +1504,9 @@ class TestJacobi(unittest.TestCase):
 
         A copy of the instance dictionary, multiplication table and all.  It is
         `__setstate__()` alone that gained a test, so that a state written by
-        one of those releases is not indexed with a layout it does not have; the
-        writer is deliberately not narrowed, because narrowing it would change
-        what a serialised point of this class means.
+        one of those releases is not indexed with a layout it does not have;
+        the writer is deliberately not narrowed, because narrowing it would
+        change what a serialised point of this class means.
         """
         point = self.fresh_generator(generator_112r2)
         _, entries = _ladder_shape(generator_112r2.order())
@@ -1565,13 +1568,14 @@ class TestJacobi(unittest.TestCase):
         The direction `__setstate__()` cannot guard: this release to an older.
 
         `__setstate__()` drops a restored table whose layout this code does not
-        index, which is what makes a state written by an earlier release safe to
-        load here.  The reverse cannot be arranged from here at all.  The state
-        is the plain instance dictionary those releases wrote, so it carries a
-        table of this layout; a release that indexes the table as the successive
-        doublings of the point has no test to tell one layout from another, and
-        would read this one as though it were that one and answer with a wrong
-        point.  No code in this release runs on that side of the exchange.
+        index, which is what makes a state written by an earlier release safe
+        to load here.  The reverse cannot be arranged from here at all.  The
+        state is the plain instance dictionary those releases wrote, so it
+        carries a table of this layout; a release that indexes the table as the
+        successive doublings of the point has no test to tell one layout from
+        another, and would read this one as though it were that one and answer
+        with a wrong point.  No code in this release runs on that side of the
+        exchange.
 
         This test is that residual written down rather than an assertion of a
         property: what it pins is that the state does carry the table, that the
@@ -1580,7 +1584,8 @@ class TestJacobi(unittest.TestCase):
         It is recorded in `SECURITY.md` as accepted, and it is inherent to
         changing the layout of a cache a serialised point has always carried --
         the alternative, emptying the entry on the way out, would narrow a
-        serialisation format every release of this library has read and written.
+        serialisation format every release of this library has read and
+        written.
         """
         generator = generator_112r2
         _, entries = _ladder_shape(generator.order())
@@ -1963,13 +1968,13 @@ class TestFixedLengthRecoding(unittest.TestCase):
         """
         Hasse's bound, checked against rather than restated.
 
-        The number of points of a curve over a field of ``p`` elements is within
-        ``2 * sqrt(p)`` of ``p + 1``, and the order of any point divides that
-        number, so no order of the curve reaches ``2 ** width``.  The check needs
-        no square root: the root of ``p`` is below two raised to half its bit
-        length rounded up, which bounds the Hasse maximum from above.  The
-        declared order of each curve is one of those orders and is compared
-        against the bound as well.
+        The number of points of a curve over a field of ``p`` elements is
+        within ``2 * sqrt(p)`` of ``p + 1``, and the order of any point divides
+        that number, so no order of the curve reaches ``2 ** width``.  The
+        check needs no square root: the root of ``p`` is below two raised to
+        half its bit length rounded up, which bounds the Hasse maximum from
+        above.  The declared order of each curve is one of those orders and is
+        compared against the bound as well.
         """
         for curve, order in self.curve_orders():
             prime = int(curve.p())
@@ -2483,6 +2488,197 @@ class TestFixedLengthRecoding(unittest.TestCase):
             PointJacobi._fixed_digits(0xFFFF, 4, 4), [15, 15, 15, 15]
         )
 
+    def test_the_helpers_answer_through_an_instance_too(self):
+        """
+        Every helper is reached as a static or class method, through both.
+
+        `__mul__()` reads them off the class, and in Python 3 a plain function
+        answers a class access exactly as a static method does, so a helper
+        that lost its decorator would go unnoticed there.  An instance access
+        is where the difference shows: a plain function reached through an
+        instance receives the point in place of its first argument.  Both
+        accesses are asserted, against the same exact values.
+        """
+        point = PointJacobi(curve_256, generator_256.x(), generator_256.y(), 1)
+        order = int(generator_256.order())
+
+        self.assertEqual(point._curve_scalar_width(curve_256), 257)
+        self.assertEqual(
+            point._curve_scalar_width(curve_256),
+            PointJacobi._curve_scalar_width(curve_256),
+        )
+        self.assertEqual(point._curve_digit_count(curve_256, _MUL_WINDOW), 65)
+        self.assertEqual(point._fixed_window(order), _MUL_WINDOW)
+        self.assertEqual(point._fixed_ladder_usable(order), True)
+        self.assertEqual(point._fixed_digit_count(order, _MUL_WINDOW), 65)
+        self.assertEqual(point._fixed_table_length(order, _MUL_WINDOW), 520)
+        self.assertEqual(point._canonical_scalar(2, order), 2 + order)
+        self.assertEqual(point._fixed_digits(1, 4, 4), [-15, -15, -15, 1])
+        self.assertEqual(point._integer_multiplier(True), 1)
+        self.assertEqual(point._naf(5), [1, 0, 1])
+
+    def test_the_shape_check_refuses_a_table_it_cannot_index(self):
+        """
+        The two halves of the check a restored table is put through.
+
+        A table of no entries indexes nothing, and an entry holding the wrong
+        number of coordinates cannot be unpacked, so neither is a table this
+        layout would have written and neither may be kept.  The number of
+        coordinates is compared by value rather than by identity, which an
+        arity above the integers CPython keeps interned is what states: a
+        table of 257 values per entry is answered on what the lengths are, not
+        on whether they are the same object.
+        """
+        order = int(generator_brainpoolp160r1.order())
+        length = PointJacobi._fixed_table_length(order, _MUL_WINDOW)
+
+        self.assertEqual(PointJacobi._fixed_table_shaped([], order, 2), False)
+        self.assertEqual(PointJacobi._fixed_table_shaped((), order, 2), False)
+        self.assertEqual(
+            PointJacobi._fixed_table_shaped([(1, 2)] * length, order, 2), True
+        )
+        self.assertEqual(
+            PointJacobi._fixed_table_shaped([(1, 2, 3)] * length, order, 2),
+            False,
+        )
+
+        narrow = 17
+        wide = [tuple(range(257))] * PointJacobi._fixed_table_length(
+            narrow, _MUL_WINDOW
+        )
+
+        self.assertEqual(len(wide), 16)
+        self.assertEqual(len(wide[0]), 257)
+        self.assertEqual(
+            PointJacobi._fixed_table_shaped(wide, narrow, 257), True
+        )
+        self.assertEqual(
+            PointJacobi._fixed_table_shaped(wide, narrow, 256), False
+        )
+
+    def test_batch_rescaling_answers_the_affine_form_of_every_point(self):
+        """
+        One modular inversion, and every coordinate a residue of the prime.
+
+        The table `_mul_fixed()` rebuilds on every call is rescaled in one
+        batch.  Each entry has to come back reduced modulo the field prime,
+        not merely congruent to its residue: the addition formula the ladder
+        reaches spots two equal operands by comparing raw coordinate
+        differences, so a coordinate carrying a whole prime more than its
+        residue would be read as a different point.  Asserted against the
+        affine coordinates the same points scale to one at a time.
+        """
+        prime = curve_256.p()
+        base = PointJacobi(curve_256, generator_256.x(), generator_256.y(), 1)
+        points = [base * multiple for multiple in (1, 3, 5, 7)]
+        raw = [point._PointJacobi__coords for point in points]
+
+        scaled = PointJacobi._scaled_all(raw, prime)
+
+        self.assertEqual(len(scaled), 4)
+        for point, entry in zip(points, scaled):
+            self.assertEqual(entry, (point.x(), point.y(), 1))
+            for coordinate in entry:
+                self.assertGreaterEqual(coordinate, 0)
+                self.assertLess(coordinate, prime)
+
+    def test_batch_rescaling_keeps_the_point_at_infinity(self):
+        """
+        A zero ``z`` counts as one in the product and comes back all zero.
+
+        The odd multiple table of `_mul_fixed()` runs past the order of a low
+        order point, so one of its entries can be the point at infinity, and a
+        zero entering the product would take every other entry down with it.
+        Stated with the point at infinity first, in the middle and last, since
+        the product is accumulated forwards and unwound backwards.
+        """
+        prime = curve_256.p()
+        base = PointJacobi(curve_256, generator_256.x(), generator_256.y(), 1)
+        one, three = base * 1, base * 3
+        affine = [(one.x(), one.y(), 1), (three.x(), three.y(), 1)]
+
+        for position in (0, 1, 2):
+            batch = list(affine)
+            batch.insert(position, (0, 0, 0))
+
+            scaled = PointJacobi._scaled_all(batch, prime)
+
+            self.assertEqual(len(scaled), 3)
+            self.assertEqual(scaled[position], (0, 0, 0))
+            self.assertEqual(
+                scaled[:position] + scaled[position + 1 :], affine
+            )
+
+    def test_the_table_less_ladder_at_a_wider_window(self):
+        """
+        The ladder honours the width it is handed, table and all.
+
+        `_mul_fixed_digits()` takes its window as an argument and builds the
+        ``2 ** (window - 1)`` odd multiples of that width before walking the
+        digits.  A width wider than the one this module recodes at is stated
+        here so that the count the build stops at follows the argument rather
+        than any one value, and so that it is compared by value: the count of
+        a wide window is above the integers CPython keeps interned.
+        """
+        order = int(generator_256.order())
+        window = 10
+        point = PointJacobi(
+            curve_256, generator_256.x(), generator_256.y(), 1, order
+        )
+        multiplier = 0x1234567890ABCDEF
+        digits = PointJacobi._fixed_digits(
+            PointJacobi._canonical_scalar(multiplier, order),
+            PointJacobi._fixed_digit_count(order, window),
+            window,
+        )
+
+        self.assertEqual(len(digits), 26)
+        self.assertEqual(1 << (window - 1), 512)
+
+        coords = point._mul_fixed_digits(digits, window)
+        product = PointJacobi(
+            curve_256, coords[0], coords[1], coords[2], order
+        )
+
+        self.assertEqual(product, generator_256 * multiplier)
+
+    def test_a_table_of_more_positions_than_an_interned_integer(self):
+        """
+        The most significant position is the one that advances no base.
+
+        Every position but the last leaves the base of the next one behind it
+        and the last does not, so a table of ``positions`` positions pays
+        ``positions - 1`` of those advances and no more.  Where it stops is
+        asserted for an order wide enough that the position counted up to is
+        above the integers CPython keeps interned, which is what states that
+        stopping follows a comparison of values.  A caller may hand any order
+        to a point: `ecdsa.ecdsa.Private_key` takes any generator it is given.
+        """
+        order = (1 << 1027) + 1
+        window = _MUL_WINDOW
+        positions = PointJacobi._fixed_digit_count(order, window)
+        entries = PointJacobi._fixed_table_length(order, window)
+        point = PointJacobi(
+            curve_256,
+            generator_256.x(),
+            generator_256.y(),
+            1,
+            order,
+            True,
+        )
+
+        self.assertEqual((positions, entries), (258, 2064))
+        self.assertGreater(positions, 256)
+
+        with _CountedOperations(PointJacobi) as counted:
+            point * 3
+        table = point._PointJacobi__precompute
+
+        self.assertEqual(len(table), entries)
+        self.assertEqual(
+            counted.counts(), (entries, (positions - 1) * window + 1)
+        )
+
     @pytest.mark.skipif(not GMPY, reason="requires gmpy or gmpy2")
     def test_recoding_of_a_gmpy_multiplier(self):  # pragma: no cover
         # the recoding coerces its input, so that the digits do not depend on
@@ -2775,10 +2971,11 @@ class TestEdwardsPrecompute(unittest.TestCase):
         differs here is the contract on the other side: releases up to 0.19.1
         defined neither `__getstate__` nor `__setstate__` for this class, so
         they wrote and read the plain instance dictionary and built their table
-        only while the attribute was false -- and this release still writes that
-        same dictionary, so the table travels and such a release would index
-        this layout as its own.  That residual is recorded in `SECURITY.md` as
-        accepted; what is asserted here is that it is what it is said to be.
+        only while the attribute was false -- and this release still writes
+        that same dictionary, so the table travels and such a release would
+        index this layout as its own.  That residual is recorded in
+        `SECURITY.md` as accepted; what is asserted here is that it is what it
+        is said to be.
         """
         point = self.fresh_generator()
         _, entries = _ladder_shape(point.order())
@@ -2808,10 +3005,10 @@ class TestEdwardsPrecompute(unittest.TestCase):
         self.assertEqual(
             restored._PointEdwards__order, generator_ed25519.order()
         )
-        # the layout of the successive doubling ladder those releases indexed is
-        # not this one, which is the whole of the residual: it held one entry per
-        # bit of the order plus three, and its second entry was twice the point
-        # where the second entry here is three times it
+        # the layout of the successive doubling ladder those releases indexed
+        # is not this one, which is the whole of the residual: it held one
+        # entry per bit of the order plus three, and its second entry was twice
+        # the point where the second entry here is three times it
         self.assertNotEqual(bit_length(point.order()) + 3, entries)
         self.assertEqual(len(point._PointEdwards__precompute), entries)
         plain = self.fresh_generator(False)
@@ -2823,8 +3020,8 @@ class TestEdwardsPrecompute(unittest.TestCase):
     def test_setstate_discards_a_table_of_another_layout(self):
         point = self.fresh_generator()
         _, entries = _ladder_shape(point.order())
-        # this class defines no `__getstate__`, so a state of it is the instance
-        # dictionary
+        # this class defines no `__getstate__`, so a state of it is the
+        # instance dictionary
         template = dict(point.__dict__)
 
         for table in (
@@ -2854,9 +3051,9 @@ class TestEdwardsPrecompute(unittest.TestCase):
         point = self.fresh_generator()
         digits, entries = _ladder_shape(point.order())
         point._maybe_precompute()
-        # this class defines no `__getstate__`, so a state of it is the instance
-        # dictionary; the table is copied so that keeping it cannot be confused
-        # with sharing the very list the warm point holds
+        # this class defines no `__getstate__`, so a state of it is the
+        # instance dictionary; the table is copied so that keeping it cannot be
+        # confused with sharing the very list the warm point holds
         state = dict(point.__dict__)
         state["_PointEdwards__precompute"] = list(
             point._PointEdwards__precompute
@@ -2874,3 +3071,42 @@ class TestEdwardsPrecompute(unittest.TestCase):
             product = restored * 12345
         self.assertEqual(product, generator_ed25519 * 12345)
         self.assertEqual(counted.counts(), (digits, 0))
+
+    def test_a_table_of_more_positions_than_an_interned_integer(self):
+        """
+        The counterpart of the same assertion on `PointJacobi`.
+
+        This builder advances the base of the next position for every position
+        but the most significant one too, so the same order states the same
+        thing here: where the build stops follows a comparison of values, not
+        of identities, for a position count above the integers CPython keeps
+        interned.
+        """
+        generator = generator_ed25519
+        prime = generator.curve().p()
+        coord_x, coord_y = generator.x(), generator.y()
+        order = (1 << 1027) + 1
+        window = _MUL_WINDOW
+        positions = PointEdwards._fixed_digit_count(order, window)
+        entries = PointEdwards._fixed_table_length(order, window)
+        point = PointEdwards(
+            generator.curve(),
+            coord_x,
+            coord_y,
+            1,
+            coord_x * coord_y % prime,
+            order,
+            True,
+        )
+
+        self.assertEqual((positions, entries), (258, 2064))
+        self.assertGreater(positions, 256)
+
+        with _CountedOperations(PointEdwards) as counted:
+            table = point._maybe_precompute()
+
+        self.assertEqual(len(table), entries)
+        self.assertEqual(
+            counted.counts(),
+            (entries - positions, (positions - 1) * window + 1),
+        )

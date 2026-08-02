@@ -38,8 +38,8 @@ carries the curve order, schedule a number of point operations that follows the
 order alone; an exchange against a public point decoded from an encoding gets
 no order with it, so its count follows the curve instead, which bounds every
 order a point of that curve can have, and `TestECDHKeyAgreement` measures both.
-A point built with an order the recoding cannot use, or multiplied by a value no
-group of its curve could hold, keeps the multiplier driven ladder, and
+A point built with an order the recoding cannot use, or multiplied by a value
+no group of its curve could hold, keeps the multiplier driven ladder, and
 `TestEdgeCasePreservation` pins what it answers as a compatibility behaviour
 rather than a hardened one.  And no operation of this library is claimed to
 cost the same whatever its inputs are: a Python integer operation costs
@@ -314,16 +314,16 @@ def order_less_shape(curve, window=None):
 
     The shape `table_less_shape()` describes, over a digit count taken from the
     curve instead of from an order, and one addition more: a multiplier that
-    cannot be normalised against an order is made odd instead, and this point is
-    subtracted from the product of that odd form, both answers being derived for
-    every multiplier and one picked out by index.
+    cannot be normalised against an order is made odd instead, and this point
+    is subtracted from the product of that odd form, both answers being derived
+    for every multiplier and one picked out by index.
 
     The digit count follows Hasse's bound.  Every order a point of a curve over
-    a field of ``p`` elements can have is below ``2 ** (bit_length(p) + 1)``, so
-    that many bits, split into as few whole windows as possible, hold every
+    a field of ``p`` elements can have is below ``2 ** (bit_length(p) + 1)``,
+    so that many bits, split into as few whole windows as possible, hold every
     multiplier such a point can be given.  It is derived here from the field
-    prime and the window alone, for the reason `fixed_ladder_shape()` gives, and
-    it is not always the count an order of the same curve gives: a group
+    prime and the window alone, for the reason `fixed_ladder_shape()` gives,
+    and it is not always the count an order of the same curve gives: a group
     narrower than its field is recoded into fewer digits than the bound is.
 
     Only the short Weierstrass points reach this, `ecdsa.keys` attaching an
@@ -395,9 +395,9 @@ def count_formula_calls(point_class, names, work):
 
     `count_point_operations()` wraps only the two dispatchers, `_add()` and
     `_double()`, so a multiplier that steers a ladder from one addition formula
-    into another -- or into a doubling formula, which is what an addition of two
-    equal points is answered with -- changes nothing it can see.  This wraps
-    every formula named, so that substitution is visible.
+    into another -- or into a doubling formula, which is what an addition of
+    two equal points is answered with -- changes nothing it can see.  This
+    wraps every formula named, so that substitution is visible.
 
     Every wrapper is removed again in a `finally`, so that no other test and no
     other caller in the process ever sees a patched class.
@@ -1226,8 +1226,9 @@ class TestPointDoublingCountInvariance(unittest.TestCase):
         Edwards exception that helper describes is asserted where the residues
         reaching it are, in `TestNarrowOrderHardening`.  The other place this
         shape is asserted, `TestECDHKeyAgreement`, writes the same two counts
-        out again rather than calling that helper, so that the shape an exchange
-        is held to does not come from the one expression this class checks.
+        out again rather than calling that helper, so that the shape an
+        exchange is held to does not come from the one expression this class
+        checks.
         """
         return table_less_shape(curve, window)
 
@@ -1435,15 +1436,15 @@ class TestNarrowOrderHardening(unittest.TestCase):
         (89, 3, 18, 0, 14, 103),
     )
 
-    #: the same four orders as twisted Edwards groups: prime, a, d, the
-    #: coordinates of a point of that order, and the order.  A complete
-    #: twisted Edwards curve has a point of order four, so the group is four
-    #: times as large as the subgroup used here and ``d`` is a non-square, which
-    #: is what keeps the addition formula away from its exceptional cases.  None
-    #: of the multiples of these points has a zero coordinate, which matters
-    #: because `PointEdwards.__add__()` reads a zero ``x`` or ``x * y`` as the
-    #: point at infinity -- true for the identity and, on a group with a
-    #: cofactor, for the points of order two and four as well.
+    # : the same four orders as twisted Edwards groups: prime, a, d, the :
+    # coordinates of a point of that order, and the order.  A complete :
+    # twisted Edwards curve has a point of order four, so the group is four :
+    # times as large as the subgroup used here and ``d`` is a non-square, which
+    # : is what keeps the addition formula away from its exceptional cases.
+    # None : of the multiples of these points has a zero coordinate, which
+    # matters : because `PointEdwards.__add__()` reads a zero ``x`` or ``x *
+    # y`` as the : point at infinity -- true for the identity and, on a group
+    # with a : cofactor, for the points of order two and four as well.
     EDWARDS_GROUPS = (
         (53, 1, 27, 4, 27, 17),
         (61, 1, 29, 4, 6, 19),
@@ -1506,12 +1507,12 @@ class TestNarrowOrderHardening(unittest.TestCase):
         order and the width alone.
 
         The table of a generator holds the odd multiples of a whole window per
-        digit position; a multiplication that reads it performs one addition per
-        digit and no doubling.  One that has no table builds the odd multiples
-        of the point first, which is one doubling for the step between them and
-        one addition for each further multiple, and then spends a whole window
-        of doublings per digit except before the most significant one, which has
-        nothing but the point at infinity to act on.
+        digit position; a multiplication that reads it performs one addition
+        per digit and no doubling.  One that has no table builds the odd
+        multiples of the point first, which is one doubling for the step
+        between them and one addition for each further multiple, and then
+        spends a whole window of doublings per digit except before the most
+        significant one, which has nothing but the point at infinity to act on.
         """
         digits, entries = fixed_ladder_shape(order, window)
         return (
@@ -1749,8 +1750,8 @@ class TestNarrowOrderHardening(unittest.TestCase):
     def test_a_narrow_group_hands_the_affine_ladder_over(self):
         # The affine implementation keeps the X9.62 D.3.2 ladder, whose work
         # follows the multiplier, and hands a multiplication over to the Jacobi
-        # coordinate one whenever the order allows it.  A narrow order allows it
-        # now, so these points get the fixed work too.
+        # coordinate one whenever the order allows it.  A narrow order allows
+        # it now, so these points get the fixed work too.
         for index in range(len(self.GROUPS)):
             curve, x, y, order = self.group(index)
             window = PointJacobi._fixed_window(order)
@@ -1833,22 +1834,22 @@ class TestNarrowOrderHardening(unittest.TestCase):
         The same groups, with the order withheld from the point.
 
         A point that knows no order is recoded against its curve instead, so
-        these groups get a fixed cost as well -- a different one, taken from the
-        field rather than from the order, and one addition more for the
+        these groups get a fixed cost as well -- a different one, taken from
+        the field rather than from the order, and one addition more for the
         correction that stands in for the order.  Every multiplier is checked
-        against a product built by repeated addition, which is what makes this a
-        claim about a ladder rather than about the nine multipliers a test
+        against a product built by repeated addition, which is what makes this
+        a claim about a ladder rather than about the nine multipliers a test
         happened to pick.
 
-        The nine fields are between four and seven bits wide, which all round up
-        to the same two digits, so the count below is one literal for all nine.
-        A group of this size is where the odd multiples a digit names run past
-        the order and reach the point at infinity, which the affine entries of a
-        table cannot hold -- the reason `_fixed_window()` refuses an order this
-        narrow.  Without an order there is nothing to refuse it by, so the case
-        is asserted instead: an entry that is the point at infinity is added as
-        the point at infinity, which is what that multiple of the point is, so
-        the products are right and the count does not move.
+        The nine fields are between four and seven bits wide, which all round
+        up to the same two digits, so the count below is one literal for all
+        nine. A group of this size is where the odd multiples a digit names run
+        past the order and reach the point at infinity, which the affine
+        entries of a table cannot hold -- the reason `_fixed_window()` refuses
+        an order this narrow.  Without an order there is nothing to refuse it
+        by, so the case is asserted instead: an entry that is the point at
+        infinity is added as the point at infinity, which is what that multiple
+        of the point is, so the products are right and the count does not move.
         """
         window = ellipticcurve._MUL_WINDOW
         for index in range(len(self.GROUPS)):
@@ -1879,11 +1880,12 @@ class TestNarrowOrderHardening(unittest.TestCase):
         """
         The same groups, on the ladder releases up to 0.19.1 drove.
 
-        Without this the counts above could be constant because these groups are
-        too small for anything to vary in.  That ladder is still reached, by an
-        affine point that knows no order -- `test_ellipticcurve` counts the same
-        thing on a registered curve -- and its work varies with the multiplier on
-        every one of the nine, which is what the fixed counts above replace.
+        Without this the counts above could be constant because these groups
+        are too small for anything to vary in.  That ladder is still reached,
+        by an affine point that knows no order -- `test_ellipticcurve` counts
+        the same thing on a registered curve -- and its work varies with the
+        multiplier on every one of the nine, which is what the fixed counts
+        above replace.
         """
         for index in range(len(self.GROUPS)):
             curve, x, y, order = self.group(index)
@@ -2037,9 +2039,9 @@ class TestNarrowOrderHardening(unittest.TestCase):
         # No multiple of an even order changes the parity of a multiplier, so
         # there is no odd value congruent to an even multiplier for the
         # recoding to work on, whatever the digit width.  Such a group is not a
-        # valid set of ECDSA domain parameters -- both ECDSA and SEC 1 require a
-        # prime generator order -- and it keeps the behaviour of releases up to
-        # 0.19.1, which is what is asserted here.
+        # valid set of ECDSA domain parameters -- both ECDSA and SEC 1 require
+        # a prime generator order -- and it keeps the behaviour of releases up
+        # to 0.19.1, which is what is asserted here.
         for order in (2 * SMALLEST_ORDER, 2 * int(NIST256p.order), 30, 256):
             self.assertEqual(PointJacobi._fixed_window(order), 0)
             self.assertEqual(PointJacobi._fixed_ladder_usable(order), False)
@@ -2062,6 +2064,58 @@ class TestNarrowOrderHardening(unittest.TestCase):
             counts.add((adds, doubles))
         self.assertGreater(len(counts), 1)
 
+    def test_an_unusable_order_keeps_the_reduction_of_those_releases(self):
+        """
+        Including its modulus: twice the order, and no other multiple of it.
+
+        A point whose order the recoding cannot use is multiplied the way
+        releases up to 0.19.1 multiplied every point, and that includes their
+        reduction of the multiplier modulo twice the order -- the "protection"
+        the advisory was reported against, which those releases applied and
+        which cancelled the padding applied above it.  Keeping their behaviour
+        means keeping that multiple exactly, so it is pinned here rather than
+        left to be whichever multiple happens to answer one multiplier
+        correctly.
+
+        Two multipliers pin it and both are needed.  Nine and twenty fall on
+        different residues under each neighbouring modulus -- twice the order,
+        the order itself, three times it, four times it, two more than it, and
+        the order or half of it -- so neither multiplier alone notices every
+        way the multiple could be wrong: nine is congruent to its own residue
+        under the order itself, and twenty is under four times it.
+
+        The point is a generator of NIST256p declaring an order of four, which
+        no group of that curve has.  Declaring it is the whole of what sends
+        the multiplication down the older ladder, and it keeps the group the
+        answers are compared against a real one: nine reduces to one and
+        twenty to four, so the answers are that generator and its fourth
+        multiple.  A real order would leave both multipliers alone, every one
+        of them being far narrower than any order a registered curve declares,
+        which is why the reduction is only observable against a narrow one.
+        """
+        generator = NIST256p.generator
+        point = PointJacobi(
+            generator.curve(), generator.x(), generator.y(), 1, 4
+        )
+        self.assertEqual(PointJacobi._fixed_ladder_usable(4), False)
+        self.assertEqual(precompute_table(point), [])
+
+        edwards = Ed25519.generator
+        edwards_point = PointEdwards(
+            edwards.curve(),
+            edwards.x(),
+            edwards.y(),
+            1,
+            edwards.x() * edwards.y(),
+            4,
+        )
+        self.assertEqual(PointEdwards._fixed_ladder_usable(4), False)
+
+        for multiplier, residue in ((9, 1), (20, 4)):
+            self.assertEqual(multiplier % (4 * 2), residue)
+            self.assertEqual(point * multiplier, generator * residue)
+            self.assertEqual(edwards_point * multiplier, edwards * residue)
+
 
 class TestECDHKeyAgreement(unittest.TestCase):
     """
@@ -2076,8 +2130,8 @@ class TestECDHKeyAgreement(unittest.TestCase):
     That point arrives in one of two shapes, and the number of point operations
     is fixed for both.  A point built by multiplying a curve generator reports
     its order -- `keys.SigningKey.get_verifying_key()` builds its public point
-    that way, and a product reports the order of the point it came from -- so the
-    multiplier is normalised against that order and the exchange costs what
+    that way, and a product reports the order of the point it came from -- so
+    the multiplier is normalised against that order and the exchange costs what
     `table_less_shape()` says.  None of the public point encodings carries an
     order, so a point handed to `keys.VerifyingKey.from_string()` or to one of
     its DER and PEM siblings reports none; the width of the multiplier then
@@ -2089,8 +2143,8 @@ class TestECDHKeyAgreement(unittest.TestCase):
     The two counts are different numbers and each of them is fixed, so what an
     observer can tell them apart by is which shape of point they handed in
     themselves.  Neither follows the private key.  In releases up to 0.19.1 the
-    decoded case spent exactly the bit length of that key in doublings, which is
-    the leak the advisory reports for ECDH and which these tests measure the
+    decoded case spent exactly the bit length of that key in doublings, which
+    is the leak the advisory reports for ECDH and which these tests measure the
     absence of; the counts below are exact, so what `SECURITY.md`, `README` and
     `NEWS` say about either case cannot drift from the code.
 
@@ -2198,10 +2252,10 @@ class TestECDHKeyAgreement(unittest.TestCase):
         No public point encoding carries an order, and none of the decoders
         invents one, whether or not the caller asked for the point to be
         validated.  This is read from the point rather than assumed, because
-        every claim about the recoding a decoded key takes rests on it: there is
-        no order for `PointJacobi._fixed_ladder_usable()` to accept, so it is
-        `PointJacobi._curve_fixed_usable()` that has to answer for the width,
-        and it does -- for a private key of every width the curve holds.
+        every claim about the recoding a decoded key takes rests on it: there
+        is no order for `PointJacobi._fixed_ladder_usable()` to accept, so it
+        is `PointJacobi._curve_fixed_usable()` that has to answer for the
+        width, and it does -- for a private key of every width the curve holds.
         """
         for curve in self.CURVES:
             raw = SigningKey.generate(curve=curve).get_verifying_key()
@@ -2234,10 +2288,10 @@ class TestECDHKeyAgreement(unittest.TestCase):
 
         A decoded remote point reports no order, so the multiplier -- the long
         term private key -- is recoded against the curve, and every private key
-        width costs the one count `order_less_shape()` names.  In releases up to
-        0.19.1 the doubling count of this exchange was exactly the bit length of
-        that key; the assertions below are that one count holds for every width
-        and that it is not the bit length of any of them.
+        width costs the one count `order_less_shape()` names.  In releases up
+        to 0.19.1 the doubling count of this exchange was exactly the bit
+        length of that key; the assertions below are that one count holds for
+        every width and that it is not the bit length of any of them.
         """
         for curve in self.CURVES:
             expected = order_less_shape(curve)
@@ -2263,8 +2317,8 @@ class TestECDHKeyAgreement(unittest.TestCase):
                 counts.append((additions, doublings))
 
             self.assertEqual(sorted(set(counts)), [expected], curve.name)
-            # more than one width was actually exchanged under, so that equality
-            # is an invariance and not a single measurement
+            # more than one width was actually exchanged under, so that
+            # equality is an invariance and not a single measurement
             self.assertGreater(len(counts), 2)
             # and the doubling count is the bit length of none of those widths,
             # which is what every one of them used to cost
@@ -2307,11 +2361,11 @@ class TestECDHKeyAgreement(unittest.TestCase):
         The same long term secret is multiplied by a point that reports the
         order and by the very same point decoded from its encoding.  The two
         multiplications cost differently -- the decoded one pays the addition
-        that stands in for the order it does not know -- and neither cost follows
-        the secret: three private key widths give the same two counts, so what an
-        observer tells them apart by is which shape of point they handed in
-        themselves.  The secret is the same either way, the two points being the
-        same point.
+        that stands in for the order it does not know -- and neither cost
+        follows the secret: three private key widths give the same two counts,
+        so what an observer tells them apart by is which shape of point they
+        handed in themselves.  The secret is the same either way, the two
+        points being the same point.
         """
         curve = NIST256p
         peer = SigningKey.generate(curve=curve).get_verifying_key()
@@ -2380,23 +2434,23 @@ class TestSignedDigitSymmetry(unittest.TestCase):
     The sign of a digit costs the same as its absence of one.
 
     The recoding of a multiplier emits signed digits, and a negative one asks
-    the ladder for the negation of the table entry it selected -- one field wide
-    negation on the Weierstrass points, two on the twisted Edwards ones, where
-    the product of the affine coordinates is negated along with the x
+    the ladder for the negation of the table entry it selected -- one field
+    wide negation on the Weierstrass points, two on the twisted Edwards ones,
+    where the product of the affine coordinates is negated along with the x
     coordinate.  How many of the digits are negative follows the multiplier
-    (between 18 and 27 of the 65 digits of a NIST256p multiplier, and between 12
-    and 30 of the 41 of a SECP160r1 one, over the multipliers this class uses),
-    so doing that work only on the negative ones would put a quantity derived
-    from the secret back into the run time -- the same shape of leak the number
-    of additions used to carry.
+    (between 18 and 27 of the 65 digits of a NIST256p multiplier, and between
+    12 and 30 of the 41 of a SECP160r1 one, over the multipliers this class
+    uses), so doing that work only on the negative ones would put a quantity
+    derived from the secret back into the run time -- the same shape of leak
+    the number of additions used to carry.
 
-    The ladders therefore derive both polarities of the selected entry for every
-    digit and pick the answer out by index.  Asserted here by counting the
-    negations rather than by timing anything: the count has to be a constant
-    that follows the number of digit positions, which is public, while the
-    number of negative digits varies.  Both fixed work paths are covered, since
-    a secret reaches both -- a nonce the table of a generator, an ECDH private
-    key a point without one.
+    The ladders therefore derive both polarities of the selected entry for
+    every digit and pick the answer out by index.  Asserted here by counting
+    the negations rather than by timing anything: the count has to be a
+    constant that follows the number of digit positions, which is public, while
+    the number of negative digits varies.  Both fixed work paths are covered,
+    since a secret reaches both -- a nonce the table of a generator, an ECDH
+    private key a point without one.
     """
 
     #: negations a digit asks for, by point class
@@ -3590,14 +3644,14 @@ class TestNonceUnpaddingRegression(unittest.TestCase):
         How many nonces the cancellation covered, per curve, exactly.
 
         Stated as integer comparisons rather than as a probability: a floating
-        point ratio of numbers this size rounds, and for the worst curve here it
-        rounds to exactly one, which would read as a claim that the
+        point ratio of numbers this size rounds, and for the worst curve here
+        it rounds to exactly one, which would read as a claim that the
         cancellation was total when in truth a vanishing fraction of nonces
         escaped it.  On SECP160r1 more than 999 nonces in every 1000 were
-        cancelled; on the three Brainpool curves more than 490 in
-        every 1000, the widest of them being the worst at over 810; and on
-        P-256 and SECP256k1 fewer than one in ten thousand, which is why they
-        looked unaffected under a uniformly drawn nonce.
+        cancelled; on the three Brainpool curves more than 490 in every 1000,
+        the widest of them being the worst at over 810; and on P-256 and
+        SECP256k1 fewer than one in ten thousand, which is why they looked
+        unaffected under a uniformly drawn nonce.
         """
         for curve in self.ALWAYS_CANCELLED:
             order = int(curve.order)
@@ -3649,13 +3703,14 @@ class TestNonceUnpaddingRegression(unittest.TestCase):
         """
         The nonces that used to lose their padding keep it now.
 
-        Two things have to hold at once.  The value the ladder is driven with is
-        no longer the bare nonce but one bounded by the order alone -- at least
-        as wide as the order and at most two bits wider, which is the range
-        `TestCanonicalScalar` pins -- so the number of digits it is recoded into
-        is a function of the order, and with it the number of point operations
-        those digits cost; and it is still congruent to the nonce modulo the
-        order, so the point -- and with it the signature -- is unchanged.
+        Two things have to hold at once.  The value the ladder is driven with
+        is no longer the bare nonce but one bounded by the order alone -- at
+        least as wide as the order and at most two bits wider, which is the
+        range `TestCanonicalScalar` pins -- so the number of digits it is
+        recoded into is a function of the order, and with it the number of
+        point operations those digits cost; and it is still congruent to the
+        nonce modulo the order, so the point -- and with it the signature -- is
+        unchanged.
 
         The width itself is not one value, and this test does not claim it is:
         what the old padding was reaching for was a width that did not follow
@@ -3798,14 +3853,14 @@ class TestEdwardsRawScalarRegression(unittest.TestCase):
     operations.
     """
 
-    #: The two Edwards curves and how wide a value each hands its ladder: the
-    #: hash function of the curve produces that many bits and the whole of it is
-    #: the multiplier.  Ed25519 hashes with SHA-512 and Ed448 with SHAKE256 at
-    #: 114 bytes.
+    # : The two Edwards curves and how wide a value each hands its ladder: the
+    # : hash function of the curve produces that many bits and the whole of it
+    # is : the multiplier.  Ed25519 hashes with SHA-512 and Ed448 with SHAKE256
+    # at : 114 bytes.
     HASH_WIDTHS = ((Ed25519, 512), (Ed448, 912))
 
-    #: The private key of the first Ed25519 test vector of RFC 8032, so that the
-    #: multipliers asserted below are values any reader can reproduce.
+    # : The private key of the first Ed25519 test vector of RFC 8032, so that
+    # the : multipliers asserted below are values any reader can reproduce.
     RFC_8032_ED25519_KEY = (
         "9d61b19deffd5a60ba844af492ec2cc4" "4449c5697b326919703bac031cae7f60"
     )
@@ -3876,13 +3931,13 @@ class TestEdwardsRawScalarRegression(unittest.TestCase):
 
         Nothing about the current code is exercised here.  Reducing a hash
         modulo twice the order bounds it, and bounding it is all it does: over
-        sixteen values of the width each curve hashes to, the width of what came
-        out took five distinct values on Ed25519 and four on Ed448, and the
-        number of additions the old ladder would have spent on them -- the non
-        zero digits of their non adjacent form -- took eleven and twelve.  Both
-        are pinned exactly so that neither can drift without this failing, and
-        both hold on a tree without the countermeasure, so this describes the
-        defect rather than the code that replaced it.
+        sixteen values of the width each curve hashes to, the width of what
+        came out took five distinct values on Ed25519 and four on Ed448, and
+        the number of additions the old ladder would have spent on them -- the
+        non zero digits of their non adjacent form -- took eleven and twelve.
+        Both are pinned exactly so that neither can drift without this failing,
+        and both hold on a tree without the countermeasure, so this describes
+        the defect rather than the code that replaced it.
         """
         self.assert_the_old_reduction_left_a_spread(
             Ed25519,
@@ -3929,16 +3984,16 @@ class TestEdwardsRawScalarRegression(unittest.TestCase):
 
         The counterpart of the reduction above.  The same values, normalised
         rather than reduced, come out odd, still congruent to the hash modulo
-        the order -- so the point EdDSA commits to is the point it always was --
-        and bounded by the order rather than by the hash: at least as wide as
-        the order and at most two bits wider, whatever the five hundred and
+        the order -- so the point EdDSA commits to is the point it always was
+        -- and bounded by the order rather than by the hash: at least as wide
+        as the order and at most two bits wider, whatever the five hundred and
         twelve bits the hash arrives with looked like.
 
         What is one value is the number of digits the recoding produces from
-        them, and with it the number of point additions the ladder spends, which
-        is what the test above measures.  A single *width* is not claimed
-        because it would be false: three orders reach one bit above the order on
-        Ed25519 and two on Ed448, and which of those a particular hash gets
+        them, and with it the number of point additions the ladder spends,
+        which is what the test above measures.  A single *width* is not claimed
+        because it would be false: three orders reach one bit above the order
+        on Ed25519 and two on Ed448, and which of those a particular hash gets
         follows its residue.  ``SECURITY.md`` records that residue.
         """
         for curve, hash_width in self.HASH_WIDTHS:
@@ -4308,14 +4363,15 @@ class TestSignatureTransparency(unittest.TestCase):
         """
         A caller-supplied entropy source still decides the nonce it draws.
 
-        The `entropy=` argument feeds nonce generation and nothing else, and the
-        factor blinding the inversion is drawn from a source of the library's
-        own and cancels exactly, so a caller that fixes the source a signature
-        is drawn from still fixes the whole signature: two signatures drawn from
-        the same fixed source are the same signature, exactly as they were
-        before the countermeasure.  That the blinding factor differs between
-        those two signatures all the same is asserted by `TestBlindedInversion`;
-        what is asserted here is the result a caller sees.
+        The `entropy=` argument feeds nonce generation and nothing else, and
+        the factor blinding the inversion is drawn from a source of the
+        library's own and cancels exactly, so a caller that fixes the source a
+        signature is drawn from still fixes the whole signature: two signatures
+        drawn from the same fixed source are the same signature, exactly as
+        they were before the countermeasure.  That the blinding factor differs
+        between those two signatures all the same is asserted by
+        `TestBlindedInversion`; what is asserted here is the result a caller
+        sees.
         """
         key = self.signing_key(NIST256p)
         first = key.sign_digest(self.DIGEST, entropy=self.entropy)
@@ -4416,20 +4472,21 @@ class TestBlindedInversion(unittest.TestCase):
     the loop runs, where it runs one -- a different value on every signature.
 
     The price is disclosed rather than avoided: signing now reads the entropy
-    source even when the caller supplied the nonce itself, and a refusal of that
-    source is reported as the `RuntimeError` the low level method has always
-    documented.  Falling back to an unblinded inversion instead would let
-    whoever can exhaust the source switch the countermeasure off, and deriving
-    the factor to avoid the read would put a repeatable value back where a fresh
-    one is needed.  What a caller fixing the randomness of a signature still
-    gets is the signature it always got, byte for byte, because the factor
-    cancels; what it does not get is a signing operation that reads nothing.
+    source even when the caller supplied the nonce itself, and a refusal of
+    that source is reported as the `RuntimeError` the low level method has
+    always documented.  Falling back to an unblinded inversion instead would
+    let whoever can exhaust the source switch the countermeasure off, and
+    deriving the factor to avoid the read would put a repeatable value back
+    where a fresh one is needed.  What a caller fixing the randomness of a
+    signature still gets is the signature it always got, byte for byte, because
+    the factor cancels; what it does not get is a signing operation that reads
+    nothing.
 
     That the source is read says only that a factor was drawn -- an
     implementation that drew one and then inverted the nonce itself would
-    satisfy every assertion about the value of a signature, because the blinding
-    cancels and leaves the signature exactly as it was.  What the inversion is
-    handed therefore has to be asserted directly, which is what
+    satisfy every assertion about the value of a signature, because the
+    blinding cancels and leaves the signature exactly as it was.  What the
+    inversion is handed therefore has to be asserted directly, which is what
     `test_the_inversion_is_given_the_blinded_nonce_and_not_the_nonce` and
     `test_the_blinded_operand_differs_across_repeated_signatures` do.
 
@@ -4456,20 +4513,20 @@ class TestBlindedInversion(unittest.TestCase):
     # every value it can possibly answer with is already coprime with the order
     # and the rejection below is unreachable there -- and standing in for the
     # source with a value it could never return, zero, would assert the
-    # behaviour of a collaborator that does not exist.  This generator has order
-    # 20, so 2, 4, 5, 10 and their multiples are values the real `randrange()`
-    # can and does return and which the rejection must catch.  The scalar, nonce
-    # and message are chosen so that the signature exists and verifies: on a
-    # composite order the nonce and `s` have to be invertible too, which is a
-    # property of the curve and not of the blinding.
+    # behaviour of a collaborator that does not exist.  This generator has
+    # order 20, so 2, 4, 5, 10 and their multiples are values the real
+    # `randrange()` can and does return and which the rejection must catch.
+    # The scalar, nonce and message are chosen so that the signature exists and
+    # verifies: on a composite order the nonce and `s` have to be invertible
+    # too, which is a property of the curve and not of the blinding.
     COMPOSITE_ORDER = 20
     COMPOSITE_SECRET = 3
     COMPOSITE_NONCE = 7
     COMPOSITE_MESSAGE = 11
     # the signature that key, nonce and message give.  It is a fixed value
-    # because the blinding cancels, so it is written out rather than recomputed:
-    # a change that let the factor through into the result would be caught here
-    # rather than quietly agreed with.
+    # because the blinding cancels, so it is written out rather than
+    # recomputed: a change that let the factor through into the result would be
+    # caught here rather than quietly agreed with.
     COMPOSITE_SIGNATURE = (16, 17)
     # two factors of the composite order above, one of which cannot blind an
     # inversion modulo it and one of which can.  Both are values the real
@@ -4514,13 +4571,13 @@ class TestBlindedInversion(unittest.TestCase):
         """
         Stand in for the source so that the factors it offers are known.
 
-        Answers a callable of the shape `util.randrange()` has, handing out each
-        of `count` freshly generated factors once and refusing to be asked more
-        often than that, together with the list the orders it was asked for are
-        recorded in and the factors themselves.
+        Answers a callable of the shape `util.randrange()` has, handing out
+        each of `count` freshly generated factors once and refusing to be asked
+        more often than that, together with the list the orders it was asked
+        for are recorded in and the factors themselves.
 
-        The factors are coprime with `order` and differ from each other and from
-        one, so that a signature cannot come out right by the factor being
+        The factors are coprime with `order` and differ from each other and
+        from one, so that a signature cannot come out right by the factor being
         ignored.
 
         :param int order: the order the factors are drawn modulo
@@ -4583,9 +4640,10 @@ class TestBlindedInversion(unittest.TestCase):
 
         The module reference `ecdsa` holds is stood in for rather than the
         function inside `numbertheory`, because that function object is shared
-        with `ellipticcurve`, which inverts a field element every time it scales
-        a point; replacing the name only where `ecdsa` reads it records the
-        inversions this class is about and leaves the point arithmetic alone.
+        with `ellipticcurve`, which inverts a field element every time it
+        scales a point; replacing the name only where `ecdsa` reads it records
+        the inversions this class is about and leaves the point arithmetic
+        alone.
 
         :param action: what to run
         :type action: callable
@@ -4686,8 +4744,8 @@ class TestBlindedInversion(unittest.TestCase):
         this class once had, with a domain separation tag and a call into
         `rfc6979` -- would satisfy every assertion about the value of a
         signature, because the blinding cancels either way, and would silently
-        take away the freshness the tests below are about.  So the derived shape
-        is asserted absent as well as the drawn one present.
+        take away the freshness the tests below are about.  So the derived
+        shape is asserted absent as well as the drawn one present.
         """
         self.assertIs(ecdsa_module.randrange, randrange)
         self.assertFalse(hasattr(ecdsa_module, "_BLINDING_TAG"))
@@ -4703,8 +4761,8 @@ class TestBlindedInversion(unittest.TestCase):
 
         Four ways of asking for a signature that is a function of its inputs
         alone: the low level method with the nonce handed in, the deterministic
-        signing of RFC 6979, deterministic signing of a digest, and signing with
-        the caller's own entropy source.  Every one of them now reads the
+        signing of RFC 6979, deterministic signing of a digest, and signing
+        with the caller's own entropy source.  Every one of them now reads the
         operating system, because the factor is drawn there and the nonce being
         fixed does not fix the factor -- and every one of them still answers
         with the same bytes twice, because the factor cancels.
@@ -4712,10 +4770,10 @@ class TestBlindedInversion(unittest.TestCase):
         Both halves matter.  Without the reads the factor would be repeatable
         and the loop it is there to decouple would walk the same path twice;
         without the identical answers the countermeasure would have changed a
-        documented result.  The fourth case makes the point sharpest: the caller
-        supplied a source of its own for the nonce, and the factor was still
-        drawn from the module's, so a caller cannot reach the factor even by
-        handing in the randomness of everything else.
+        documented result.  The fourth case makes the point sharpest: the
+        caller supplied a source of its own for the nonce, and the factor was
+        still drawn from the module's, so a caller cannot reach the factor even
+        by handing in the randomness of everything else.
         """
         order = int(NIST256p.order)
         private_key = self.private_key()
@@ -4778,19 +4836,19 @@ class TestBlindedInversion(unittest.TestCase):
         Blinding the inversion with a drawn factor makes signing depend on the
         entropy source even when the caller supplied the nonce itself, and a
         source is a thing that can decline.  A refusal is reported as the
-        `RuntimeError` this method has always documented, rather than let out as
-        the error of the source: `sign_digest_deterministic()` retries
+        `RuntimeError` this method has always documented, rather than let out
+        as the error of the source: `sign_digest_deterministic()` retries
         `RSZeroError` and nothing else, so reporting that here would loop for
         ever, and falling back to an unblinded inversion would let whoever can
         exhaust the source switch the countermeasure off.
 
         Both refusals a source can raise are covered -- `EnvironmentError`,
-        which is `OSError` on Python 3, and the `NotImplementedError` a Python 2
-        `os.urandom()` raises where it has no source at all -- and both a nonce
-        handed in and a nonce derived, because the second reads no randomness
-        for its nonce and would otherwise look like a path that never draws.
-        The message names the entropy source, so a caller told to retry with a
-        new nonce can tell the two `RuntimeError`s apart.
+        which is `OSError` on Python 3, and the `NotImplementedError` a Python
+        2 `os.urandom()` raises where it has no source at all -- and both a
+        nonce handed in and a nonce derived, because the second reads no
+        randomness for its nonce and would otherwise look like a path that
+        never draws. The message names the entropy source, so a caller told to
+        retry with a new nonce can tell the two `RuntimeError`s apart.
         """
         order = int(NIST256p.order)
         private_key = self.private_key()
@@ -4846,17 +4904,18 @@ class TestBlindedInversion(unittest.TestCase):
         The freshness of the factor, observed rather than argued.
 
         Signing the same digest with the same nonce twice gives the same bytes,
-        which is necessary but not sufficient: a factor drawn once and cached, or
-        one fixed at import, or one computed from the key and the nonce would
-        give the same bytes too.  What separates those is how often the source is
-        read and what is done with what it offers, so the source is stood in for
-        by one that hands out a different valid factor each time it is asked.
+        which is necessary but not sufficient: a factor drawn once and cached,
+        or one fixed at import, or one computed from the key and the nonce
+        would give the same bytes too.  What separates those is how often the
+        source is read and what is done with what it offers, so the source is
+        stood in for by one that hands out a different valid factor each time
+        it is asked.
 
         Two signatures then have to read it exactly twice, take a different
         factor each, and still come out byte for byte identical -- identical
-        because the factor cancels, twice because it is not kept.  Exactly twice
-        and not more, because a factor drawn per point operation would be a
-        different implementation with a different cost.
+        because the factor cancels, twice because it is not kept.  Exactly
+        twice and not more, because a factor drawn per point operation would be
+        a different implementation with a different cost.
         """
         private_key = self.private_key()
         order = int(NIST256p.order)
@@ -4893,14 +4952,14 @@ class TestBlindedInversion(unittest.TestCase):
 
         This is the assertion that makes the blinding a countermeasure.  A
         repeatable factor -- one derived from the key and the nonce, say --
-        gives the same operand every time, so the loop that inverts it walks the
-        same path every time, so an attacker who can ask for the same signature
-        repeatedly averages the measurement noise away and is left with a time
-        that follows the secret after all.  The factors are prepared rather than
-        drawn from the real source, so what is asserted is a list of values this
-        test names, and a run of it neither depends on nor reports luck.  The
-        eight signatures are identical all the same, which is what the freshness
-        costs the caller: nothing.
+        gives the same operand every time, so the loop that inverts it walks
+        the same path every time, so an attacker who can ask for the same
+        signature repeatedly averages the measurement noise away and is left
+        with a time that follows the secret after all.  The factors are
+        prepared rather than drawn from the real source, so what is asserted is
+        a list of values this test names, and a run of it neither depends on
+        nor reports luck.  The eight signatures are identical all the same,
+        which is what the freshness costs the caller: nothing.
         """
         order = int(NIST256p.order)
         private_key = self.private_key()
@@ -4963,16 +5022,16 @@ class TestBlindedInversion(unittest.TestCase):
         """
         The two properties the drawn factor has to have, wherever it is used.
 
-        In range, so that multiplying by it and reducing stays in the group, and
-        invertible modulo the order, or `(b*k)^-1 * b` would not be `k^-1` and
-        the signature would come out wrong rather than merely slow.
+        In range, so that multiplying by it and reducing stays in the group,
+        and invertible modulo the order, or `(b*k)^-1 * b` would not be `k^-1`
+        and the signature would come out wrong rather than merely slow.
 
         Asserted across the curves rather than on one, because the factor is
         drawn modulo the order of whichever generator is signing and has to
         answer within it for every order the library ships -- the shortest of
         them, 112 bits, and the longest, 521.  The signature the real source
-        produces is verified on each, which is the end to end statement that the
-        algebra holds for a factor nobody chose.
+        produces is verified on each, which is the end to end statement that
+        the algebra holds for a factor nobody chose.
         """
         for curve in (SECP112r2, NIST256p, BRAINPOOLP384r1, Ed25519):
             order = int(curve.order)
@@ -5081,8 +5140,8 @@ class TestBlindedInversion(unittest.TestCase):
         does not follow the nonce either.
 
         The stand-in forwards to the real `randrange()` rather than answering
-        with a value of its own, so what is counted is the behaviour of the real
-        source on a real order.
+        with a value of its own, so what is counted is the behaviour of the
+        real source on a real order.
         """
         order = int(NIST256p.order)
         private_key = self.private_key()
@@ -5114,12 +5173,13 @@ class TestBlindedInversion(unittest.TestCase):
         What the loop the countermeasure is about actually walks.
 
         Every other assertion here is about the factor; this one is about the
-        operand, which is what the timing of the inversion follows and therefore
-        the only thing that makes the blinding a countermeasure rather than an
-        unused computation.  The module reference `ecdsa` holds is stood in for
-        and the inversion modulo the order is picked out of what it was called
-        with -- the other one, modulo the prime of the field, belongs to reading
-        the first coordinate of a point and is not blinded.
+        operand, which is what the timing of the inversion follows and
+        therefore the only thing that makes the blinding a countermeasure
+        rather than an unused computation.  The module reference `ecdsa` holds
+        is stood in for and the inversion modulo the order is picked out of
+        what it was called with -- the other one, modulo the prime of the
+        field, belongs to reading the first coordinate of a point and is not
+        blinded.
 
         The operand has to be the nonce multiplied by the factor the source
         offered and reduced, and it has to differ from the nonce, and the
@@ -5172,23 +5232,24 @@ class TestEdgeCasePreservation(unittest.TestCase):
     countermeasure had no licence to make.
 
     What the countermeasure does change, deliberately, is *how* those points
-    are arrived at, and this class keeps the two apart.  A point whose order the
-    fixed length recoding can use no longer decides from its multiplier whether
-    to run a ladder at all: zero and one used to be answered ahead of one, in no
-    point operations, where every other multiplier cost the full fixed number,
-    which is exactly the short circuit CVE-2024-23342 is about -- and a
-    multiplier of one is not hypothetical, `SigningKey.sign_number()` accepting
-    any nonce from one up.  Both of them now cost what every other multiplier
-    costs, as `test_the_edge_multipliers_cost_what_every_multiplier_costs`
-    asserts, and which of two ready answers a caller is handed is picked out by
-    index once that work is done.  So the answers themselves are the ones those
-    releases gave, down to the identity of the object: the very point that was
+    are arrived at, and this class keeps the two apart.  A point whose order
+    the fixed length recoding can use no longer decides from its multiplier
+    whether to run a ladder at all: zero and one used to be answered ahead of
+    one, in no point operations, where every other multiplier cost the full
+    fixed number, which is exactly the short circuit CVE-2024-23342 is about --
+    and a multiplier of one is not hypothetical, `SigningKey.sign_number()`
+    accepting any nonce from one up.  Both of them now cost what every other
+    multiplier costs, as
+    `test_the_edge_multipliers_cost_what_every_multiplier_costs` asserts, and
+    which of two ready answers a caller is handed is picked out by index once
+    that work is done.  So the answers themselves are the ones those releases
+    gave, down to the identity of the object: the very point that was
     multiplied for a multiplier of one, and the point at infinity for a
     multiplier of zero.  A point that knows no order pays the same way, its
     width coming from its curve; what keeps the shortcuts, the reduction modulo
-    twice the order and the ladder releases up to 0.19.1 drove with it is a point
-    whose order is too small for the recoding, and a multiplier no group of the
-    curve could hold, which no other test in this file visits.
+    twice the order and the ladder releases up to 0.19.1 drove with it is a
+    point whose order is too small for the recoding, and a multiplier no group
+    of the curve could hold, which no other test in this file visits.
     """
 
     # the curve the advisory names and the smallest registered curve, which
@@ -5228,11 +5289,11 @@ class TestEdgeCasePreservation(unittest.TestCase):
 
         A point whose order the recoding can use runs its ladder for this
         multiplier like for any other, so the work is done -- but the answer
-        handed back is still the object that was multiplied, picked out by index
-        once the ladder has finished.  It is the only result that carries the
-        order the point knows, its generator flag and its multiplication table,
-        which is why releases up to 0.19.1 answered with it and why this keeps
-        doing so.
+        handed back is still the object that was multiplied, picked out by
+        index once the ladder has finished.  It is the only result that carries
+        the order the point knows, its generator flag and its multiplication
+        table, which is why releases up to 0.19.1 answered with it and why this
+        keeps doing so.
         """
         for curve in self.EDGE_CURVES:
             for label, point in self.points_of(curve):
@@ -5285,11 +5346,12 @@ class TestEdgeCasePreservation(unittest.TestCase):
         `False` is a zero; a `None` is refused rather than read as one.
 
         `False` is an integer in Python, is recoded like any other multiplier,
-        and comes out as the zero it stands for.  A `None` is not an integer and
-        has no bits for a recoding to read, so it is refused by the normalising
-        step every multiplication starts with rather than being read as the zero
-        releases up to 0.19.1 read it as -- see `TestMultiplierNormalisation`,
-        which covers that step and the rest of these values.
+        and comes out as the zero it stands for.  A `None` is not an integer
+        and has no bits for a recoding to read, so it is refused by the
+        normalising step every multiplication starts with rather than being
+        read as the zero releases up to 0.19.1 read it as -- see
+        `TestMultiplierNormalisation`, which covers that step and the rest of
+        these values.
         """
         for curve in self.EDGE_CURVES:
             for label, point in self.points_of(curve):
@@ -5309,8 +5371,8 @@ class TestEdgeCasePreservation(unittest.TestCase):
         Zero, one, the order, one more and one less than it, and a full width
         multiplier all cost the same number of point additions and point
         doublings on a point whose order the recoding can use -- with a table
-        and without one.  This is the assertion the shortcuts this class used to
-        pin would fail: with them in place a multiplier of one cost no point
+        and without one.  This is the assertion the shortcuts this class used
+        to pin would fail: with them in place a multiplier of one cost no point
         operation at all, which is a difference in run time an attacker reads
         off directly.
         """
@@ -5393,18 +5455,51 @@ class TestEdgeCasePreservation(unittest.TestCase):
         for scalar in (2, 5, edwards_order):
             self.assertEqual(flat_edwards * scalar, INFINITY)
 
+    def test_a_point_with_one_guarded_coordinate_zero(self):
+        """
+        Either of the two an Edwards point guards is enough on its own.
+
+        The guard reads the first coordinate and the fourth, and a point
+        holding a zero in *one* of them is answered with the point at infinity
+        exactly as one holding a zero in both is.  Requiring both to be zero
+        instead would let such a point through to a ladder, which answers a
+        point that is not on the curve with another that is not either -- an
+        answer, not a refusal, so nothing further along would notice.  Only
+        the two asymmetric cases tell the readings apart, and only one of them
+        carries the difference all the way out: a zero *first* coordinate
+        leaves the ladder at infinity anyway, so a point holding a zero only
+        in its fourth is what pins the guard.
+
+        The point at infinity is the very object, not merely an equal one,
+        since the guard answers before the multiplier is read at all.  No
+        curve of this library produces such a point; the guard is reachable
+        from outside and behaves as it did in releases up to 0.19.1.
+        """
+        generator = Ed25519.generator
+        order = int(Ed25519.order)
+        curve = generator.curve()
+        # a zero first coordinate, a zero fourth, and both zero at once
+        for x, t in ((0, 5), (5, 0), (0, generator.x() * generator.y())):
+            point = PointEdwards(curve, x, generator.y(), 1, t, order)
+            for scalar in (2, 5, order - 1, order):
+                self.assertIs(
+                    point * scalar,
+                    INFINITY,
+                    "coordinates %d and %d, multiplier %d" % (x, t, scalar),
+                )
+
     def test_a_point_that_knows_no_order_agrees_with_one_that_does(self):
         """
         The two recodings answer every multiplier the same way.
 
-        A point that knows no order has its multiplier recoded against its curve
-        rather than against an order, which is what an ECDH exchange against a
-        decoded public point takes -- `ecdsa.keys` attaches no order when it
-        decodes one, see `TestECDHKeyAgreement`.  The two recodings are different
-        widths and, for a multiplier past the bound the curve gives, different
-        ladders, so that they arrive at the same points is asserted rather than
-        assumed.  ``2 * order + 3`` is the multiplier that reaches past that
-        bound on SECP160r1, whose group is wider than its field.
+        A point that knows no order has its multiplier recoded against its
+        curve rather than against an order, which is what an ECDH exchange
+        against a decoded public point takes -- `ecdsa.keys` attaches no order
+        when it decodes one, see `TestECDHKeyAgreement`.  The two recodings are
+        different widths and, for a multiplier past the bound the curve gives,
+        different ladders, so that they arrive at the same points is asserted
+        rather than assumed.  ``2 * order + 3`` is the multiplier that reaches
+        past that bound on SECP160r1, whose group is wider than its field.
         """
         for curve in self.EDGE_CURVES:
             order = int(curve.order)
@@ -5544,8 +5639,8 @@ class TestMultiplierNormalisation(unittest.TestCase):
 
     Unlike the class above this describes behaviour the countermeasure
     introduced, and it is asserted here because everything the countermeasure
-    derives from a multiplier is integer arithmetic: the recodings read the bits
-    of the multiplier with shifts, masks and divisions, so a value with a
+    derives from a multiplier is integer arithmetic: the recodings read the
+    bits of the multiplier with shifts, masks and divisions, so a value with a
     fraction to truncate -- a half, the decimal digits of a string -- would
     multiply a point by a number its caller never asked for, and a value that
     is not numeric at all would surface as whichever error the first arithmetic
@@ -5556,14 +5651,15 @@ class TestMultiplierNormalisation(unittest.TestCase):
     The step that asks is `AbstractPoint._integer_multiplier()`, and it comes
     ahead of everything else a multiplication does with the multiplier -- ahead
     of the choice of ladder, ahead of the shortcut for a multiplier of zero and
-    of one.  It has to: a value that reached a ladder without passing through it
-    would be a value the work of a multiplication could be told apart by, which
-    is the property CVE-2024-23342 is about.  It asks in two steps, and only the
-    first of them is ever reached by a multiplier this library itself forms:
+    of one.  It has to: a value that reached a ladder without passing through
+    it would be a value the work of a multiplication could be told apart by,
+    which is the property CVE-2024-23342 is about.  It asks in two steps, and
+    only the first of them is ever reached by a multiplier this library itself
+    forms:
 
     * `operator.index()`, which reads the type and never the value.  `int`,
-      `bool` and the ``mpz`` of both gmpy releases answer it whatever they hold,
-      so no assertion in this file depends on which of the three integer
+      `bool` and the ``mpz`` of both gmpy releases answer it whatever they
+      hold, so no assertion in this file depends on which of the three integer
       backends the module was built on, and no secret is ever looked at.
     * a conversion, for a value of some other type that still stands for one
       integer and nothing else -- a `float`, `Fraction` or `Decimal` with no
@@ -5626,8 +5722,8 @@ class TestMultiplierNormalisation(unittest.TestCase):
         when one was the multiplier a caller hands a multiplication may be one,
         since this module does its own arithmetic with them.  Either way the
         value comes back as one of the plain integer types of the interpreter
-        and of the same magnitude -- the recodings that follow index a list with
-        it, which an ``mpz`` cannot be used for on every release.
+        and of the same magnitude -- the recodings that follow index a list
+        with it, which an ``mpz`` cannot be used for on every release.
         """
         for value in (0, 1, 7, 1 << 300, int(NIST256p.order)):
             normalised = PointJacobi._integer_multiplier(value)
@@ -5871,6 +5967,133 @@ class TestMultiplierNormalisation(unittest.TestCase):
                     TypeError, point_class._integer_multiplier, value
                 )
 
+    def test_a_value_that_divides_to_itself_is_read_by_equality(self):
+        """
+        The first of the two questions is asked by equality, not by identity.
+
+        Dividing a value by one and comparing the two is how it is asked
+        whether it has a fraction to lose, and the comparison has to be one
+        every accepted type can answer: `Fraction(7, 1) // 1` and
+        `Decimal("2") // 1` each build a new object, so asking whether the
+        division handed back the very same object would refuse both of them --
+        and refuse them for a reason that has nothing to do with what integer
+        they stand for.  A value whose division does hand back itself is the
+        only way to tell the two readings apart, since it is the only one an
+        identity would say yes to, and it is accepted here for the multiple it
+        names.
+        """
+
+        class SelfFloor(object):
+            """Divides to the very object it divided, and equals seven."""
+
+            def __floordiv__(self, other):
+                return self
+
+            def __eq__(self, other):
+                return other is self or other == 7
+
+            def __ne__(self, other):
+                return not self.__eq__(other)
+
+            def __hash__(self):
+                return 0
+
+            def __int__(self):
+                return 7
+
+        value = SelfFloor()
+
+        # the division hands back the object it divided, so identity and
+        # equality answer the first question the same way here and only here
+        self.assertIs(value // 1, value)
+        self.assertTrue(value == value // 1)
+        # and the second question answers yes, by equality with the integer
+        self.assertEqual(int(value), 7)
+        self.assertTrue(int(value) == value)
+
+        for point_class in (PointJacobi, PointEdwards, Point):
+            self.assertEqual(point_class._integer_multiplier(SelfFloor()), 7)
+
+    def test_a_value_merely_ordered_against_the_question_is_refused(self):
+        """
+        Both questions are asked by equality, and neither by an order.
+
+        A type answers `>=` and `<=` with whatever it likes, and one answering
+        both with yes claims to be neither larger nor smaller than anything --
+        which says nothing at all about the integer it stands for.  Asking
+        either question by an order rather than by equality would therefore
+        accept a value that stands for none: the first would accept one that
+        divides to something it is not equal to, and so has a fraction to lose,
+        and the second would accept one that converts to an integer it is not
+        equal to, and so would be multiplied by a number its caller never asked
+        for.  Both are refused, and a type built to disagree is the only way to
+        reach that -- every `float`, `Fraction` and `Decimal` ordered against
+        its own division is also equal to it.
+        """
+
+        class Ordered(object):
+            """Equal to nothing but itself, and ordered against all else."""
+
+            def __eq__(self, other):
+                return other is self
+
+            def __ne__(self, other):
+                return not self.__eq__(other)
+
+            def __hash__(self):
+                return 0
+
+            def __ge__(self, other):
+                return True
+
+            def __le__(self, other):
+                return True
+
+        class DividesToAnother(Ordered):
+            """Divides to a value it is unequal to: a fraction to lose."""
+
+            def __floordiv__(self, other):
+                return Ordered()
+
+            def __eq__(self, other):
+                return other is self or other == 5
+
+            def __int__(self):
+                return 5
+
+        class ConvertsToAnother(Ordered):
+            """Loses nothing, and converts to a number it is unequal to."""
+
+            def __floordiv__(self, other):
+                return self
+
+            def __int__(self):
+                return 3
+
+        dividing = DividesToAnother()
+        converting = ConvertsToAnother()
+
+        # the first question says no to one of them and yes to the other, the
+        # second says no to both, and the orders each of them answers with say
+        # yes to everything either way round
+        self.assertFalse(dividing == dividing // 1)
+        self.assertTrue(dividing >= dividing // 1)
+        self.assertTrue(dividing <= dividing // 1)
+        self.assertTrue(converting == converting // 1)
+        self.assertFalse(int(converting) == converting)
+        self.assertTrue(int(converting) >= converting)
+        self.assertTrue(int(converting) <= converting)
+
+        for point_class in (PointJacobi, PointEdwards, Point):
+            for value in (dividing, converting):
+                self.assertRaises(
+                    TypeError, point_class._integer_multiplier, value
+                )
+        # the multiples they would have been taken for, had either question
+        # been asked by an order
+        self.assertEqual(int(dividing), 5)
+        self.assertEqual(int(converting), 3)
+
     def test_a_value_naming_an_integer_its_own_type_cannot_hold(self):
         """
         Refused, and refused without building the integer to find out.
@@ -5881,8 +6104,8 @@ class TestMultiplierNormalisation(unittest.TestCase):
         which is what keeps `Decimal("1e1000000000")` from asking for the
         allocation of a billion digits before being refused anyway.  The
         boundary is the caller's own context and moves with it, exactly as it
-        moved for releases up to 0.19.1, which reduced such a value modulo twice
-        the order of the point and were answered by the same context with
+        moved for releases up to 0.19.1, which reduced such a value modulo
+        twice the order of the point and were answered by the same context with
         `InvalidOperation`.  Those releases allowed one digit more than this,
         their reduction needing only the remainder to fit where this needs the
         integral part to; a `Decimal` of exactly that width is the one value
@@ -5974,8 +6197,8 @@ class TestMultiplierNormalisation(unittest.TestCase):
         half is included deliberately: it used to be answered with the point,
         because a half truncates towards a single set digit, and a complex
         number of one for the same reason, because the guard that answered a
-        multiplier of one compared for equality.  That guard now sits behind the
-        normalising step -- it had to, or a nonce of one would never have
+        multiplier of one compared for equality.  That guard now sits behind
+        the normalising step -- it had to, or a nonce of one would never have
         reached a ladder.  A value that is merely false -- a `None`, an empty
         sequence -- is refused rather than read as the zero those releases read
         it as.
@@ -6060,7 +6283,8 @@ class TestMultiplierNormalisation(unittest.TestCase):
 
     def test_the_affine_multiplication_reads_it_in_the_one_place_too(self):
         """
-        The affine implementation reads the multiplier in the one place as well.
+        The affine implementation reads the multiplier in the one place as
+        well.
 
         Whether the point knows its order or not, the multiplier reaches the
         normalising step before anything is done with it, so a value standing
@@ -6163,9 +6387,9 @@ class TestMultiplierNormalisation(unittest.TestCase):
         """
         It never looks at the multiplier at all, exactly as before.
 
-        `INFINITY` is the affine point with no coordinates and no order, and the
-        test for it comes ahead of the normalising step, so a multiplier it is
-        handed is neither normalised nor refused.  Both groups of value are
+        `INFINITY` is the affine point with no coordinates and no order, and
+        the test for it comes ahead of the normalising step, so a multiplier it
+        is handed is neither normalised nor refused.  Both groups of value are
         asserted, since releases up to 0.19.1 answered every one of them here.
         """
         for value in (
