@@ -23,9 +23,10 @@ and as a teaching tool.
 **This library does not protect against side-channel attacks in general, and makes no
 constant-time guarantee for any operation.** One reported timing side channel has been
 narrowed, and only that one: the number of elliptic curve point operations that signing,
-key generation and EdDSA signing schedule is now fixed by the public order of the curve
-rather than by the secret they are performed with, and the same holds of an ECDH exchange
-where the remote point carries an order. One rare exception survives on the Edwards curves,
+key generation, EdDSA signing and an ECDH exchange schedule is now fixed by the public
+parameters of the curve rather than by the secret they are performed with -- by its order
+where the point carries one and by its field where the point carries no order, as a remote
+public point decoded from an encoding does. One rare exception survives on the Edwards curves,
 where at most two multipliers per order cost a single doubling beyond that schedule. It is
 described below, together with what the change does and does not cover; read that before
 relying on any of it.
@@ -134,8 +135,7 @@ The resulting count is fixed per code path, and is not one number for the whole 
   performs one operation more than every other multiplier does. Removing it would mean giving every
   multiplication an unconditional extra doubling, which is a worse trade than recording it;
 * a point whose order the recoding cannot use keeps the older multiplication, whose cost follows
-  its multiplier. The fixed ladder is unavailable in three cases, and a test enumerates them: the
-  order is absent, even, or below 17. The last two are consequences of the mechanism
+  its multiplier. Such an order is even, or below 17, and both are consequences of the mechanism
   rather than choices. An even order has no odd representative for the multiplier to be reduced to,
   since adding an even number to a residue cannot change its parity; and an order below 17 cannot
   be recoded at all, because one of the eight odd multiples of the point that a digit position
@@ -144,20 +144,40 @@ The resulting count is fixed per code path, and is not one number for the whole 
   declares an odd order of at least 110 bits, so neither of those two reaches a registered curve --
   a recoding narrow enough to be two digits wide covers orders 17 to 63, and only a group a caller
   assembles themselves can be that small;
-* the first of those three, a point with no order, is the remaining limitation of this change. A
-  public point decoded from an encoding carries no order: `VerifyingKey.from_string()` builds it
-  from coordinates alone and nothing attaches the order of the curve to it. An ECDH exchange against
-  a peer key that arrived over the wire therefore multiplies the long-term private key on the older
-  ladder, and the number of doublings that ladder performs is the bit length of that key -- measured
-  on NIST256p, 256, 192, 128 and 64 doublings for a private key of those bit lengths, against a
-  fixed 72 additions and 257 doublings when the same exchange is run against a public key this
-  process derived from a `SigningKey`, which does carry the order. Signing and key generation
-  multiply the generator of the curve, which carries its order on every registered curve, and are
-  covered; an exchange is covered only where the remote point carries one. A point on a curve of the
-  caller's own, and one accepted by `VerifyingKey.from_string()` with `validate_point=False` that
-  turns out not to lie on the curve or not to belong to the group the base point generates, are on
-  that same ladder for the same reason. None of them is rejected instead: rejecting would withdraw a
-  documented opt-out, and it would not make the multiplication any cheaper to hide.
+* a point that reports no order at all is covered too, against its curve rather than against an
+  order, and this is the ECDH case the advisory names. A public point decoded from an encoding
+  carries no order: `VerifyingKey.from_string()` builds it from coordinates alone and nothing
+  attaches the order of the curve to it, so an exchange against a peer key that arrived over the
+  wire multiplies the long-term private key by a point that knows nothing about its group. Hasse's
+  theorem bounds the number of points of a curve over a field of p elements to within 2\*sqrt(p) of
+  p + 1, and the order of any point divides that number, so no order of the curve reaches
+  2\*\*(bit_length(p) + 1). That bound supplies the width the missing order cannot. The multiplier
+  is made odd by setting its lowest bit -- one bitwise operation, no branch -- recoded into the digit
+  count the bound gives, and this point is then subtracted from the product of that odd form; both
+  answers are derived for every multiplier and its parity picks one out by index, so neither parity
+  costs an operation the other does not. Such an exchange therefore costs 73 point additions and 257
+  doublings on NIST256p whatever the private key is, where releases up to 0.19.1 spent exactly the
+  bit length of that key in doublings -- measured 256, 192, 128 and 64 for private keys of those
+  widths. That is one addition above the 72 and 257 the same exchange costs against a public key
+  this process derived from a `SigningKey`, and a digit more on a curve whose group is narrower than
+  its field: 37 additions and 113 doublings on SECP112r2, of a 110-bit group over a 112-bit field.
+  Which of the two counts an exchange spends says which shape of point the caller handed in, and
+  neither of them says anything about the key;
+* what stays on the older ladder is therefore narrow, and a test enumerates it: an order that is
+  even or below 17; a multiplier of a point with no order that is negative, or wider than every
+  group of its curve, neither of which a private key or a nonce can be, both being drawn from
+  [1, order); a point with no order that is flagged as a curve generator, which cannot build the
+  table that flag promises and which every release since 0.14 refuses to multiply at all; and an
+  affine point without a usable order, which no secret reaches, `ecdsa.ecdsa.Public_key` refusing a
+  generator that declares no order. A point accepted by `VerifyingKey.from_string()` with
+  `validate_point=False` that belongs to a subgroup smaller than the one the base point generates
+  is multiplied at the fixed cost of its curve like any other point of it -- a table entry that
+  lands on the point at infinity is added as the point at infinity, which is what that multiple of
+  the point is, so the product is right and the count does not move. It is right in one case where
+  the older ladder was not: on a subgroup of seven points that ladder answered one multiplier in
+  twenty-one with the point at infinity in place of the correct multiple, which the fixed recoding
+  gets right. None of these cases is rejected instead: rejecting would withdraw a documented
+  opt-out, and it would not make the multiplication any cheaper to hide.
 
 **Compatibility.** Signatures are unchanged: the same key and the same nonce produce the same
 signature as before, byte for byte, what the multiplication adds to a multiplier being a multiple
@@ -179,27 +199,61 @@ leaving the table out of the state -- would change the format for every reader i
 
 Three things did change that a caller can observe or depend on, and this is the whole list: the
 layout of the precomputation table inside a pickled point, described just above; the refusal of a
-multiplier that is not an integer, described next; and the entropy read and the `RuntimeError`
+multiplier standing for no integer, described next; and the entropy read and the `RuntimeError`
 that can come with it, described after that.
 
-A multiplier that is not an integer is refused with a `TypeError` naming its type: `multiplier must be an integer, not str`, and
-so on for every other type. Each multiplication now asks the value for its integer through
-`operator.index()` before it does anything else, which takes `int`, `bool` and the `mpz` of both
-gmpy releases losslessly and refuses everything else, where releases up to 0.19.1 answered each such
-value with whatever the arithmetic happened to make of it, and made something different of it on
-each shape of point. A `str` or a `list` raised a `TypeError` from the reduction at the top of the
-multiplication, carrying a message about string formatting or about the `%` operator that said
-nothing of multiplication. A `None` was read as a zero and answered with the point at infinity on
-the Jacobi and Edwards paths, and raised from that same reduction on the affine one. A `float` was
-worse than either, and worse in a different way on each path. The Jacobi path took any of them in
-silence and answered with the point for some other integer: 3.0, 3.5 and 3.9 all gave three times
-the point, and 2.5 gave one times it. The Edwards path took one with no fractional part the same
-way and raised a bare `AssertionError` for the rest. The affine path raised a `TypeError` for most
-of them, but answered 0.5 with one times the point. Refusing the type outright is the one answer
-that cannot be a wrong point. The refusal is deliberate rather than incidental: the shortcut
-that answers a multiplier of one had to move behind that normalising step, or a nonce of one would
-never reach a ladder at all, and a value that is not an integer cannot be normalised without
-guessing what its caller meant.
+A multiplier is read for the integer it stands for before anything else a multiplication does with
+it, and one that stands for no integer is refused with a `TypeError` naming its type: `multiplier
+must be an integer, not str`, and so on. The reading is `operator.index()` first, which takes `int`,
+`bool` and the `mpz` of both gmpy releases losslessly and reads only their type, never their value;
+then, for a value of some other type, a conversion that is accepted only if the integer it yields
+still compares equal to the value it came from. A `float`, `Fraction` or `Decimal` with no
+fractional part therefore stands for exactly one integer and is still answered with that multiple of
+the point, exactly as releases up to 0.19.1 answered it -- 2.0, `Fraction(4, 2)` and `Decimal("2")`
+all give twice the point. What reaches the ladder is the integer, though, and the value itself never
+reaches the arithmetic. That is what closes off release 1.17 of the older of the two gmpy bindings,
+which answers a float taken modulo a number as wide as a curve order by attempting an allocation of
+exabytes and aborting the interpreter: every release up to 0.19.1 performed exactly that reduction,
+on the projective paths and on the affine one alike, so with that binding installed
+`ecdsa.NIST256p.generator * 2.5` was enough to take the process down.
+
+What is refused is what stands for no one integer, and those releases answered several of them,
+differently on each shape of point. The Jacobi and Edwards paths took any float in silence and
+answered with a multiple no caller had asked for: 2.5, 3.5 and 3.9 all gave three times the point,
+and 0.5 gave one times it. The affine path answered 0.5 with one times the point as well, but
+raised a `TypeError` about the `&` operator for every float from two upwards -- including 2.0 and
+3.0, which the other two paths answered correctly, so the three did not agree even on the values
+they took. A `complex` of one was answered with the point on the two projective paths, the shortcut
+for a multiplier of one comparing for equality. A `None` or an empty sequence was read as a zero and
+answered with the point at infinity there, and raised from the reduction on the affine one. A `str`,
+a `list` or a `bytes` raised a `TypeError` carrying a message about string formatting or about the
+`%` operator that said nothing of multiplication. Refusing every one of those is the one answer that
+cannot be a wrong point, and it is deliberate rather than incidental: the shortcut that answers a
+multiplier of one had to move behind the reading step, or a nonce of one would never reach a ladder
+at all, and a value with a fraction to lose cannot be read as an integer without guessing what its
+caller meant.
+
+Whether anything is lost is asked of the value in its own type, before any integer is built from it,
+which is why a `Decimal` naming an integer wider than the precision of the `decimal` context the
+caller set is refused rather than converted: converting `Decimal("1e1000000000")` outright would ask
+for the allocation of a billion digits before being refused anyway. That boundary is the caller's own
+context and moves with it, exactly as it moved for releases up to 0.19.1, which reduced such a value
+modulo twice the order of the point and were answered by the same context with `InvalidOperation`.
+Those releases allowed one digit more than this, their reduction needing only the remainder to fit
+where this needs the integral part to, so a `Decimal` of exactly that one width -- 29 integral digits
+at the default precision of 28 -- is the only value they answered correctly that is refused here.
+A `Fraction` carries its own integer and meets no such limit.
+
+So of the values releases up to 0.19.1 accepted, every one that stood for an integer is answered with
+the same multiple as before, save that one `Decimal` width, and is newly answered on the affine path
+where it used to raise; the ones that stood for none -- a fraction, a `complex`, a value that is
+merely false -- are refused where two of the three paths answered them with a point; and a `str`, a
+`list` or a `bytes` was refused before and is refused now, only by a message naming the multiplier
+instead of whichever operation reached it first. A multiplier this library itself forms is never any
+of these:
+`util.randrange()`, `rfc6979.generate_k()`, the nonce padding and the scalars recovered by key
+decoding all produce integers, so nothing on a signing, key generation or ECDH path reaches the
+second half of the reading step, and no secret is ever looked at rather than merely typed.
 
 The third of those changes is not visible in the output at all. Signing draws one factor to blind
 the modular inversion per signature and reads `os.urandom()` at least once to obtain it -- the

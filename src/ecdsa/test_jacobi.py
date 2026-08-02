@@ -442,18 +442,6 @@ class TestJacobi(unittest.TestCase):
     @example(int(generator_brainpoolp160r1.order()))
     def test_precompute(self, mul):
         precomp = generator_brainpoolp160r1
-        # The generators of `ecdsa.ecdsa` are shared for the life of the
-        # process and build their tables lazily, so whether this one has built
-        # its own by now depends on which tests ran before this one -- and the
-        # assertion below reads that table before this test multiplies
-        # anything.  Building it explicitly first is what lets this test pass on
-        # its own; without it the assertion fails whenever this test runs
-        # first, which it does under `pytest <node id>` and has done since
-        # before the countermeasure this file also covers.  Nothing else about
-        # the test changes: it still asserts that the table is there, and still
-        # compares the two ladders over the multipliers Hypothesis picks and
-        # the two it is given by example.
-        precomp._maybe_precompute()
         self.assertTrue(precomp._PointJacobi__precompute)
         pj = PointJacobi.from_affine(generator_brainpoolp160r1)
 
@@ -1381,25 +1369,112 @@ class TestJacobi(unittest.TestCase):
         self.assertEqual(counts, [expected] * len(counts))
 
     def test_operation_count_without_an_order(self):
-        # A point that carries no order cannot have its multiplier brought to
-        # a canonical width, so it keeps the ladder whose length -- and with
-        # it its number of point operations -- follows the multiplier.  That
-        # ladder is not side channel hardened.  Signing, key generation and
-        # EdDSA multiply ordered generators and never reach it; ECDH reaches
-        # it whenever the remote public point was decoded from an encoding,
-        # which carries no order, and that decoded-key exchange is the
-        # orderless exception the countermeasure does not cover.
+        # A point that carries no order has no order to bring its multiplier to
+        # a canonical width against, so the width comes from the curve, which
+        # bounds by Hasse's theorem every order a point of it can have.  Every
+        # multiplier that curve can hold therefore costs one and the same count:
+        # the count of a point that knows its order and one addition more, for
+        # the odd form the multiplier is recoded in and the correction that
+        # brings the product back.  ECDH against a remote public point decoded
+        # from an encoding, which carries no order, is what reaches this.
         point = PointJacobi(
             curve_112r2, generator_112r2.x(), generator_112r2.y(), 1
         )
+        width = PointJacobi._curve_scalar_width(curve_112r2)
+        digits = PointJacobi._curve_digit_count(curve_112r2, _MUL_WINDOW)
+        expected = (
+            (1 << (_MUL_WINDOW - 1)) - 1 + digits + 1,
+            (digits - 1) * _MUL_WINDOW + 1,
+        )
+        # a 112 bit field, so a bound of 113 bits and 29 digits of four
+        self.assertEqual((width, digits, expected), (113, 29, (37, 113)))
 
         counts = []
-        for multiplier in (16, 31, 1 << 20, (1 << 20) - 1, 12345):
+        for multiplier in (
+            16,
+            31,
+            1 << 20,
+            (1 << 20) - 1,
+            12345,
+            0,
+            1,
+            int(generator_112r2.order()),
+            (1 << width) - 1,
+        ):
             with _CountedOperations(PointJacobi) as counted:
                 point * multiplier
             counts.append(counted.counts())
 
-        self.assertEqual(counts, [(1, 5), (2, 6), (1, 21), (2, 21), (5, 15)])
+        self.assertEqual(counts, [expected] * 9)
+
+    def test_operation_count_of_a_multiplier_past_the_curve_bound(self):
+        # A multiplier no group of the curve could hold, and a negative one,
+        # cannot be recoded against the curve: the recoding reads bits off a
+        # non-negative value, and bringing either inside the bound would need
+        # the order this point does not have.  Both keep the ladder of releases
+        # up to 0.19.1, whose point operation count follows the multiplier --
+        # which is no exposure, a private key and a nonce being drawn from
+        # `[1, order)`.
+        point = PointJacobi(
+            curve_112r2, generator_112r2.x(), generator_112r2.y(), 1
+        )
+        width = PointJacobi._curve_scalar_width(curve_112r2)
+
+        counts = []
+        for multiplier in (1 << width, (1 << width) + 1, -16, -(1 << 20)):
+            with _CountedOperations(PointJacobi) as counted:
+                point * multiplier
+            counts.append(counted.counts())
+
+        self.assertEqual(counts, [(1, 114), (2, 114), (1, 5), (1, 21)])
+        # and they answer the same points the recoded path answers
+        order = int(generator_112r2.order())
+        for multiplier in (1 << width, (1 << width) + 1, -16, -(1 << 20)):
+            self.assertEqual(
+                point * multiplier, generator_112r2 * (multiplier % order)
+            )
+
+    def test_which_points_are_recoded_against_their_curve(self):
+        # Only a point that knows no order and is not flagged as a curve
+        # generator.  A point that knows a usable order is recoded against that
+        # order, a point of an order the recoding cannot use keeps the ladder of
+        # releases up to 0.19.1, and a point flagged as a generator without an
+        # order cannot build the table its flag promises: those releases refused
+        # it and so does this, at the same multipliers and not at the two they
+        # answered ahead of the refusal.  All of it is read from the point.
+        x, y = generator_256.x(), generator_256.y()
+        order = int(generator_256.order())
+        cases = (
+            (PointJacobi(curve_256, x, y, 1), True),
+            (PointJacobi(curve_256, x, y, 1, order), False),
+            (PointJacobi(curve_256, x, y, 1, order, True), False),
+            (PointJacobi(curve_256, x, y, 1, None, True), False),
+            (PointJacobi(curve_256, x, y, 1, 2 * order), False),
+        )
+        for point, expected in cases:
+            self.assertEqual(point._curve_fixed_usable(12345), expected)
+
+        flagged = PointJacobi(curve_256, x, y, 1, None, True)
+        self.assertRaises(AssertionError, flagged.__mul__, 5)
+        self.assertIs(flagged * 0, INFINITY)
+        self.assertIs(flagged * 1, flagged)
+
+    def test_the_parity_correction_costs_the_same_either_way(self):
+        # A point that knows no order is multiplied by the odd form of its
+        # multiplier, and this point is subtracted from that product; the parity
+        # of the multiplier picks one of the two answers out by index rather than
+        # by branch, so both parities cost the same pair.  The products are
+        # asserted as well, so this covers the correction and not only its cost.
+        point = PointJacobi(curve_256, generator_256.x(), generator_256.y(), 1)
+
+        counts = []
+        for multiplier in (12344, 12345, 12346, 12347):
+            with _CountedOperations(PointJacobi) as counted:
+                product = point * multiplier
+            counts.append(counted.counts())
+            self.assertEqual(product, generator_256 * multiplier)
+
+        self.assertEqual(counts, [(73, 257)] * 4)
 
     def test_counted_operations_restores_the_methods(self):
         added = PointJacobi.__dict__["_add"]
@@ -1800,10 +1875,11 @@ class TestFixedLengthRecoding(unittest.TestCase):
             # no two adjacent non-zero ones.  Its length, and the number of
             # non-zero digits in it, both follow the multiplier, which the
             # paths still driven by it inherit: `mul_add()`, whose multipliers
-            # come from a signature and are public, and a point with no usable
-            # order.  Ordered generators -- signing, key generation, EdDSA --
-            # never reach it; ECDH against a decoded remote point does, and
-            # that is the documented orderless exception
+            # come from a signature and are public, and a point of an order
+            # the fixed length recoding cannot use.  No multiplication of a
+            # secret reaches either -- signing, key generation and EdDSA
+            # multiply ordered generators, and ECDH against a decoded remote
+            # point is recoded against the curve of that point
             if multiplier:
                 self.assertNotEqual(digits[-1], 0)
                 for position in range(len(digits) - 1):
@@ -1867,6 +1943,94 @@ class TestFixedLengthRecoding(unittest.TestCase):
         for order in self.orders():
             self.assertEqual(PointJacobi._fixed_ladder_usable(order), True)
             self.assertEqual(PointJacobi._fixed_window(order), _MUL_WINDOW)
+
+    def curve_orders(self):
+        """
+        Return the curves the curve-derived width is exercised against, each
+        with the order its registered generator declares.
+        """
+        return tuple(
+            (generator.curve(), int(generator.order()))
+            for generator in (
+                generator_112r2,
+                generator_brainpoolp160r1,
+                generator_224,
+                generator_256,
+            )
+        )
+
+    def test_curve_scalar_width_bounds_every_order_of_the_curve(self):
+        """
+        Hasse's bound, checked against rather than restated.
+
+        The number of points of a curve over a field of ``p`` elements is within
+        ``2 * sqrt(p)`` of ``p + 1``, and the order of any point divides that
+        number, so no order of the curve reaches ``2 ** width``.  The check needs
+        no square root: the root of ``p`` is below two raised to half its bit
+        length rounded up, which bounds the Hasse maximum from above.  The
+        declared order of each curve is one of those orders and is compared
+        against the bound as well.
+        """
+        for curve, order in self.curve_orders():
+            prime = int(curve.p())
+            width = PointJacobi._curve_scalar_width(curve)
+            root_bound = 1 << ((bit_length(prime) + 1) // 2)
+
+            self.assertEqual(width, bit_length(prime) + 1)
+            self.assertGreaterEqual(root_bound * root_bound, prime)
+            self.assertGreater(1 << width, prime + 1 + 2 * root_bound)
+            self.assertGreater(1 << width, order)
+
+    def test_curve_digit_count_covers_the_curve_bound(self):
+        for curve, _ in self.curve_orders():
+            width = PointJacobi._curve_scalar_width(curve)
+            for window in (1, 2, 3, 4, 5, 8):
+                digits = PointJacobi._curve_digit_count(curve, window)
+                # as few whole windows as hold the bound, and not one fewer
+                self.assertGreaterEqual(digits * window, width)
+                self.assertLess((digits - 1) * window, width)
+        # and the counts of the module's own window, as literals: fields of
+        # 112, 160, 224 and 256 bits, so bounds one bit wider than each
+        self.assertEqual(
+            [
+                PointJacobi._curve_digit_count(curve, _MUL_WINDOW)
+                for curve, _ in self.curve_orders()
+            ],
+            [29, 41, 57, 65],
+        )
+
+    def test_curve_ladder_usable_takes_what_the_curve_can_hold(self):
+        for curve, order in self.curve_orders():
+            width = PointJacobi._curve_scalar_width(curve)
+            for multiplier in (
+                0,
+                1,
+                2,
+                order - 1,
+                order,
+                order + 1,
+                (1 << width) - 1,
+            ):
+                self.assertEqual(
+                    PointJacobi._curve_ladder_usable(curve, multiplier),
+                    True,
+                    multiplier,
+                )
+            # a value no group of the curve could hold, and a negative one:
+            # neither is a value the recoding can read, and no secret of this
+            # library is either
+            for multiplier in (
+                1 << width,
+                (1 << width) + 1,
+                1 << (width + 8),
+                -1,
+                -order,
+            ):
+                self.assertEqual(
+                    PointJacobi._curve_ladder_usable(curve, multiplier),
+                    False,
+                    multiplier,
+                )
 
     def _canonical_of(self, multiplier, order):
         """

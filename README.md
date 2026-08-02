@@ -264,13 +264,15 @@ interoperability testing and as a teaching tool.
 **This library does not protect against side-channel attacks in general, and
 makes no constant-time guarantee for any operation.** One reported timing side
 channel has been narrowed, and only that one: the number of elliptic curve
-point operations that signing, key generation and EdDSA signing schedule is now
-fixed by the public order of the curve rather than by the secret they are
-performed with, and the same holds of an ECDH exchange where the remote point
-carries an order. One rare exception survives on the Edwards curves, where at
-most two multipliers per order cost a single doubling beyond that schedule.
-What the change does and does not cover is summarised below and set out in full
-in [`SECURITY.md`][4]; read that before relying on any of it.
+point operations that signing, key generation, EdDSA signing and an ECDH
+exchange schedule is now fixed by the public parameters of the curve rather
+than by the secret they are performed with -- by its order where the point
+carries one, and by its field where the point carries no order, as a remote
+public point decoded from an encoding does. One rare exception survives on the
+Edwards curves, where at most two multipliers per order cost a single doubling
+beyond that schedule. What the change does and does not cover is summarised
+below and set out in full in [`SECURITY.md`][4]; read that before relying on
+any of it.
 
 Do not allow attackers to measure how long it takes you to generate a key pair
 or sign a message. Do not allow attackers to run code on the same physical
@@ -323,16 +325,22 @@ naming here, and [`SECURITY.md`][4] gives all of them in full:
   residues of any order, which a twisted Edwards ladder answers with one
   doubling more. A nonce reaches one with probability of the order of two
   divided by the order itself;
-* the fixed ladder is unavailable in three cases -- the order is absent, even,
-  or below 17 -- and a point in any of them keeps the older ladder, whose cost
-  follows its multiplier. Every registered curve declares an odd order of at
-  least 110 bits, so only the first case reaches one;
-* an absent order is the remaining limitation. A public point decoded from an
-  encoding carries none, so an ECDH exchange against a peer key that arrived
-  over the wire multiplies the long-term private key on that older ladder,
-  where the doubling count is the bit length of that key. Signing, key
-  generation, and an exchange against a public key this process derived from a
-  `SigningKey`, are covered.
+* a point that reports no order is recoded against its curve instead of
+  against an order, Hasse's theorem bounding every order the curve could hold
+  by `2**(bit_length(p) + 1)`. That covers the ECDH case the advisory names: a
+  public point decoded from an encoding carries no order, and an exchange
+  against such a peer key costs 73 point additions and 257 doublings on
+  NIST256p whatever the private key is, where releases up to 0.19.1 spent
+  exactly the bit length of that key in doublings. It is one addition more than
+  the 72 and 257 the same exchange costs against a public key this process
+  derived from a `SigningKey`, the extra one being the correction that stands
+  in for the missing order;
+* an order that is even or below 17 cannot be recoded at all, and a point of
+  one keeps the older ladder, whose cost follows its multiplier. Every
+  registered curve declares an odd order of at least 110 bits, so neither
+  reaches one. The same ladder answers a negative multiplier of a point with no
+  order, and one wider than every group of its curve, neither of which a
+  private key or a nonce can be.
 
 This is local hardening only. No release is recorded anywhere as fixing
 CVE-2024-23342 -- the advisory lists every version as affected and none as
@@ -350,10 +358,16 @@ are unchanged. Three things did change, and this is the whole list:
   wrote is recognised, discarded and lazily rebuilt; the opposite direction is
   not guarded and cannot be, so a state written here and read by a release older
   than the countermeasure would answer with a wrong point rather than raise;
-* a multiplier that is not an integer is refused with a `TypeError` naming its
-  type, where earlier releases variously read it as a zero, answered it with
-  the point for some other integer, or raised something that named the `%`
-  operator rather than the multiplier;
+* a multiplier is read for the integer it stands for, and one standing for none
+  is refused with a `TypeError` naming its type. A `float`, `Fraction` or
+  `Decimal` with no fractional part stands for one integer and is answered with
+  that multiple of the point as it always was -- and on the affine path too
+  now, where it used to raise. One with a fraction, a `complex`, and a value
+  that is merely false stand for none and are refused, where earlier releases
+  read them as a zero or answered them with the point for some other integer.
+  A `Decimal` naming an integer one digit wider than the `decimal` context can
+  hold is refused as well, and is the only value earlier releases answered
+  correctly that this one does not; `SECURITY.md` has the whole of it;
 * signing draws one blinding factor per signature, so it reads `os.urandom()`
   even when the caller supplied the nonce or asked for the deterministic one of
   RFC 6979. That draw is separate from the `entropy=` argument and does not

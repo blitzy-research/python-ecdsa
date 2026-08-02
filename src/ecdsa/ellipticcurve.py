@@ -80,15 +80,23 @@ from .util import orderlen, string_to_number, number_to_string
 # the field prime being skipped where that is faster (see
 # `PointJacobi._double_with_z_1()`).
 #
-# Three paths keep the multiplier driven ladder of releases up to 0.19.1: a
-# point constructed without an order, a point whose order the recoding cannot
-# use (none of the registered curves), and `PointJacobi.mul_add()`, used for
-# verification with public multipliers.  Signing, key generation and EdDSA
-# always take the recoded ladder, the generator they multiply carrying its
-# order; ECDH takes it only when the remote point carries one, which a point
-# decoded from a public encoding does not.  `SECURITY.md` records that residual
-# too; closing it needs an order attached where public points are decoded,
-# outside this module.
+# A point in Jacobi coordinates that reports no order is recoded all the same,
+# against its curve: Hasse's theorem bounds every order such a point can
+# have, so `AbstractPoint._curve_scalar_width()` gives a width where the order
+# cannot, and `PointJacobi._mul_curve_fixed()` performs a fixed number of point
+# operations for every multiplier that curve can hold.  That is the path an
+# ECDH exchange takes against a remote public point decoded from an encoding --
+# no encoding carries one -- where the multiplier is the long term private key.
+#
+# What keeps the multiplier driven ladder of releases up to 0.19.1 is a point
+# whose order the recoding cannot use (none of the registered curves), a
+# multiplier no group of the point's curve could hold, a negative multiplier of
+# a point that reports no order, an affine point without a usable order, and
+# `PointJacobi.mul_add()`, used for verification with public multipliers.  No
+# secret of this library reaches any of them: signing, key generation and EdDSA
+# multiply a generator that carries its order, `ecdsa.ecdsa.Public_key` refuses
+# a generator that declares none, and a private key and a nonce are both drawn
+# from `[1, order)`.  `SECURITY.md` records each case.
 #
 # Width in bits of the recoded digits, and so of the odd multiples a table
 # holds per digit position: wider means fewer additions against a larger table.
@@ -551,32 +559,94 @@ class AbstractPoint(object):
         Return a multiplier as a plain integer, refusing anything else.
 
         The recodings read the multiplier's bits with shifts, masks and
-        divisions.  A value that merely converts to an integer -- the decimal
-        digits of a string, a float truncated towards zero -- would multiply by
-        a number the caller never asked for, and one that does not convert at
-        all would surface as whichever error the first arithmetic operation
-        happens to raise, which differs between the integer implementations
-        this module can use.  `operator.index()` refuses both with the same
-        exception: `int`, `bool` and the ``mpz`` of both gmpy releases answer
-        it losslessly while floats, strings, bytes and complex numbers do not,
-        and unlike a direct ``__index__()`` call it also refuses a method
-        answering with a non-integer.  Only the type is read, never the value.
+        divisions.  A value that stands for no integer -- the decimal digits of
+        a string, a float with a fraction to truncate -- would multiply by a
+        number the caller never asked for, and one that is not numeric at all
+        would surface as whichever error the first arithmetic operation happens
+        to raise, which differs between the integer implementations this module
+        can use.  Both are refused here, with one and the same exception, ahead
+        of everything else a multiplication does with the multiplier.
+
+        `operator.index()` is asked first, and it is the whole of the question
+        for every multiplier this library itself forms: `int`, `bool` and the
+        ``mpz`` of both gmpy releases answer it losslessly, and unlike a direct
+        ``__index__()`` call it also refuses a method answering with something
+        that is not an integer.  Only the type is read on that path, never the
+        value, so no secret-bearing multiplier is ever looked at.
+
+        A value of some other type may still stand for one integer and nothing
+        else -- a `float`, a `Fraction` or a `Decimal` with no fractional part
+        -- and releases up to 0.19.1 answered those with the multiple that
+        integer asks for.  That answer is kept: such a value is converted and
+        accepted, and the conversion is what makes accepting it safe, since the
+        integer is what reaches the recodings and the original never reaches
+        the arithmetic.  Release 1.17 of the older gmpy binding answers a float
+        taken modulo a number as wide as a curve order by attempting an
+        allocation of exabytes and taking the interpreter down with it, and
+        that is reachable only by letting the float itself through.
+
+        What is refused is therefore what loses something on the way to an
+        integer, whether it converts or not: a fraction of one half, a float
+        that is not a number or is larger than any, a string of digits, an
+        empty container, a complex number.  Releases up to 0.19.1 answered some
+        of those -- with the point for a different multiplier, with the point
+        itself, or with the point at infinity -- and none of those answers is
+        the multiple the caller asked for, so a refusal naming the type is
+        offered in their place.  Whether anything is lost is asked of the value
+        in its own type before any integer is built from it, so a value naming
+        an integer too wide for its own type to hold is refused as cheaply as
+        those releases refused it rather than by allocating one.  The value is
+        read only on this path, which no multiplier of this library's own
+        reaches.
+
         A plain `int` is returned because gmp object creation costs
         cumulatively more here than the speedup gmp gives the recodings, the
         same reason `mul_add()` coerces its multipliers.
 
-        :raises TypeError: if the multiplier is not an integer, or offers a
+        :raises TypeError: if the multiplier stands for no integer, or offers a
             ``__index__()`` that does not answer with one
+
+        :return: the integer the multiplier stands for
+        :rtype: int
         """
         try:
             return operator.index(mult)
         except TypeError:
-            # re-raised rather than propagated so that the message names the
-            # type the caller passed; the one `operator.index()` raises names
-            # it only when the multiplier offers no `__index__()` at all
-            raise TypeError(
-                "multiplier must be an integer, not %s" % type(mult).__name__
-            )
+            pass
+        try:
+            # Whether the value has a fraction is asked of the value in its
+            # own type, which builds no integer to find out: division by one
+            # answers a `float` with a `float` and a `Decimal` with a
+            # `Decimal`, and answers a `Decimal` whose integral part is wider
+            # than its own context can hold with `InvalidOperation` -- as
+            # cheaply as releases up to 0.19.1 refused that value, and without
+            # the allocation that converting `Decimal("1e1000000000")`
+            # outright would ask for.  A float that is not a number, and one
+            # larger than any number, each divide to something that is not a
+            # number and so are unequal to what they divided to; a value that
+            # is not numeric at all offers no such division and raises.  Only
+            # once a value has answered that it loses nothing is an integer
+            # built from it, and only if the two still compare equal is that
+            # integer the one the caller asked to multiply by.
+            if mult == mult // 1 and int(mult) == mult:
+                return int(mult)
+            # Every failure of those questions is a way of standing for no
+            # integer, and each has to arrive as the single exception raised
+            # below rather than as itself.  Two reach here from the division:
+            # `//` answers a type it cannot divide -- a string, a container, a
+            # complex number -- with `TypeError`, and answers a `Decimal` too
+            # wide for its context with `InvalidOperation`, an
+            # `ArithmeticError` that no integer conversion would raise.  A
+            # conversion that raises rather than answering is caught here too,
+            # so nothing a type does in place of converting is passed on.
+        except Exception:
+            pass
+        # re-raised rather than propagated so that the message names the type
+        # the caller passed; the one `operator.index()` raises names it only
+        # when the multiplier offers no `__index__()` at all
+        raise TypeError(
+            "multiplier must be an integer, not %s" % type(mult).__name__
+        )
 
     @staticmethod
     def _fixed_window(order):
@@ -585,10 +655,11 @@ class AbstractPoint(object):
 
         Returns ``_MUL_WINDOW`` when the order can carry it and zero when the
         order cannot be used at all, in which case `_fixed_ladder_usable()` is
-        false and the multiplication falls back to the non-adjacent form
-        recoding of `_naf()`.  Nothing in between, deliberately: a narrower
-        second width would make the width a point is recoded at a property of
-        an order the caller chooses.
+        false and the multiplication is recoded against the curve instead, see
+        `_curve_ladder_usable()`, or falls back to the non-adjacent form
+        recoding of `_naf()` where not even that applies.  Nothing in between,
+        deliberately: a narrower second width would make the width a point is
+        recoded at a property of an order the caller chooses.
 
         Two properties of the order are needed, neither guaranteed by a public
         constructor, both consequences of the mechanism rather than thresholds
@@ -609,7 +680,10 @@ class AbstractPoint(object):
           small yields any multiplier to a search of at most that many tries.
 
         A point either property fails for keeps the behaviour of releases up to
-        0.19.1.
+        0.19.1, except that a point which reports no order at all is recoded
+        against its curve: an unknown order is the one case of the two above
+        where nothing about the group is being claimed, and
+        `_curve_scalar_width()` bounds every order the curve could hold.
         """
         if not order or not order & 1:
             return 0
@@ -625,12 +699,15 @@ class AbstractPoint(object):
 
         True exactly when `_fixed_window()` finds a digit width the order can
         carry.  A point whose order it cannot -- no order, an even order, or a
-        group narrower than the widest digit -- falls back to the non-adjacent
-        form recoding of `_naf()`: correct, just not hiding the multiplier
-        width.  Every registered curve has an odd order wide enough, so the
-        fall-back is reached only when the caller supplied no usable order, and
-        such a point is left on it rather than rejected, as rejecting it would
-        withdraw a documented way of building a point.
+        group narrower than the widest digit -- is answered by one of the other
+        two paths.  A point that reports no order has its multiplier recoded
+        against its curve instead, see `_curve_ladder_usable()`, which is what
+        an ECDH exchange against a decoded public point takes; the remaining
+        cases fall back to the non-adjacent form recoding of `_naf()`: correct,
+        just not hiding the multiplier width.  Every registered curve has an
+        odd order wide enough, so both are reached only when the caller gave no
+        usable order, and such a point is left on them rather than rejected, as
+        rejecting it would withdraw a documented way of building a point.
         """
         return bool(cls._fixed_window(order))
 
@@ -695,6 +772,59 @@ class AbstractPoint(object):
         alone.
         """
         return (bit_length(order) + 2 + window - 1) // window
+
+    @staticmethod
+    def _curve_scalar_width(curve):
+        """
+        Width in bits no scalar of a group on `curve` can reach.
+
+        Hasse's theorem bounds the number of points of a curve over a field of
+        ``p`` elements to within ``2 * sqrt(p)`` of ``p + 1``, and the order of
+        any point divides that number, so every order a point of this curve can
+        have -- and with it every multiplier that is a residue of such an order
+        -- is below ``2 ** (bit_length(p) + 1)``.
+
+        That is what lets a point which knows no order be multiplied at a
+        fixed cost: the curve bounds the multiplier where the order cannot.
+        The bound is a property of the curve and never of the value, so it is
+        public, and two points of the same curve are recoded into the same
+        number of digits whatever multiplies them.
+        """
+        return bit_length(int(curve.p())) + 1
+
+    @classmethod
+    def _curve_digit_count(cls, curve, window):
+        """
+        Number of `_fixed_digits()` digits a scalar of `curve` can need.
+
+        Enough whole windows to cover `_curve_scalar_width()`, so the count --
+        and with it the number of point operations a ladder driven by it
+        performs -- follows the curve alone.  `_fixed_digit_count()` is that
+        same measurement taken from a known order; the two differ by a digit on
+        some curves, and neither follows a multiplier.
+        """
+        return (cls._curve_scalar_width(curve) + window - 1) // window
+
+    @classmethod
+    def _curve_ladder_usable(cls, curve, mult):
+        """
+        Can `mult` be recoded against `curve` rather than against an order?
+
+        True for a multiplier some group on `curve` could hold: not negative,
+        and narrower than `_curve_scalar_width()`.  Those are the multipliers a
+        point of unknown order can have recoded at a fixed length, which is
+        what `PointJacobi._curve_fixed_usable()` uses this for -- a public
+        point decoded from an encoding carries no order, and an ECDH exchange
+        multiplies one of those by the long term private key.
+
+        The two kinds of multiplier left out are values no secret of this
+        library is, and each is left out because the recoding cannot represent
+        it: `_fixed_digits()` reads bits off a non-negative number, and
+        bringing a wider value inside the bound would need an order to reduce
+        it against.  A private key and a nonce are both drawn from
+        ``[1, order)``, so neither is negative and neither reaches the bound.
+        """
+        return 0 <= mult < (1 << cls._curve_scalar_width(curve))
 
     @classmethod
     def _fixed_table_length(cls, order, window):
@@ -1365,31 +1495,25 @@ class PointJacobi(AbstractPoint):
             return INFINITY
         return PointJacobi(self.__curve, X3, Y3, Z3, self.__order)
 
-    def _mul_fixed(self, other):
+    def _mul_fixed_digits(self, digits, window):
         """
-        Multiply point by integer without a precomputation table.
+        Run the fixed length ladder over `digits`, reading no table.
 
-        Taken by a point that is not a curve generator but does know its order,
-        most importantly by an ECDH exchange, where the multiplier is the long
-        term private key rather than a single-use nonce.  `other` must be a
-        canonical multiplier, see `_canonical_scalar()`, so the caller must
-        also have established that the order is usable; an unusable one is
-        handled by `__mul__()` directly.
+        Returns the raw Jacobi coordinates of the product of this point and the
+        value the digits stand for.  The callers wrap them: `_mul_fixed()` for
+        a point that knows a usable order, `_mul_curve_fixed()` for one that
+        knows no order at all.
 
-        Schedules ``(count - 1) * window`` doublings and ``count`` additions,
-        ``count`` following the curve order, plus the one doubling and
-        ``2 ** (window - 1) - 1`` additions that build the table of odd
-        multiples of this point.  No count follows the multiplier.  For a 256
-        bit order and this module's window: 257 doublings, 72 additions.
+        Every digit `_fixed_digits()` produces is non-zero, so ``count`` of
+        them schedule ``count`` additions and ``(count - 1) * window``
+        doublings, plus the one doubling and ``2 ** (window - 1) - 1``
+        additions that build the table of odd multiples of this point.  No
+        count follows the value the digits carry.  For 65 digits and the window
+        of this module, the shape of a 256 bit curve: 257 doublings, 72 adds.
         """
         p, a = self.__curve.p(), self.__curve.a()
-        order = self.__order
-        window = self._fixed_window(order)
         _double = self._double
         _add = self._add
-        digits = self._fixed_digits(
-            other, self._fixed_digit_count(order, window), window
-        )
 
         # odd multiples 1, 3, ..., 2**window - 1 of this point.  They are
         # accumulated in Jacobi coordinates and rescaled together at the end,
@@ -1425,10 +1549,106 @@ class PointJacobi(AbstractPoint):
             X2, Y2, Z2 = table[(abs(dig) - 1) >> 1]
             X3, Y3, Z3 = _add(X3, Y3, Z3, X2, (Y2, -Y2 % p)[dig < 0], Z2, p)
 
+        return X3, Y3, Z3
+
+    def _mul_fixed(self, other):
+        """
+        Multiply point by integer without a precomputation table.
+
+        Taken by a point that is not a curve generator but does know its order,
+        most importantly by an ECDH exchange, where the multiplier is the long
+        term private key rather than a single-use nonce.  `other` must be a
+        canonical multiplier, see `_canonical_scalar()`, so the caller must
+        also have established that the order is usable; an unusable one is
+        handled by `__mul__()` directly.
+
+        The point operation count is the one `_mul_fixed_digits()` describes,
+        over a digit count that follows the curve order.
+        """
+        order = self.__order
+        window = self._fixed_window(order)
+        digits = self._fixed_digits(
+            other, self._fixed_digit_count(order, window), window
+        )
+        X3, Y3, Z3 = self._mul_fixed_digits(digits, window)
+
+        if not Z3:
+            return INFINITY
+
+        return PointJacobi(self.__curve, X3, Y3, Z3, order)
+
+    def _mul_curve_fixed(self, other):
+        """
+        Multiply a point that knows no order by a non-negative integer.
+
+        The path an ECDH exchange takes when the remote public point was
+        decoded from an encoding: such an encoding carries no order and
+        `ecdsa.keys.VerifyingKey` attaches none, so the multiplier -- the long
+        term private key -- cannot be brought to a canonical width against one.
+        `_curve_scalar_width()` supplies a width from the curve instead, and
+        this schedules, for every multiplier that curve can hold, the fixed
+        count `_mul_fixed_digits()` describes and one addition more.  `other`
+        must satisfy `_curve_ladder_usable()`.
+
+        Two steps make up for the missing order.  The recoding needs an odd
+        value and no multiple of an unknown order can be added to supply one,
+        so the multiplier is made odd by setting its lowest bit: one bitwise
+        operation, no branch, and still inside the bound, which is a whole
+        number of bits.  That is the multiplier itself where it was odd and one
+        too many where it was even, so this point is subtracted from the
+        product as well.  Both answers are derived for every multiplier and its
+        parity picks one out by index, exactly as a digit's sign is applied, so
+        neither parity costs an operation the other does not.
+
+        The subtraction is that one further addition, of the negation of this
+        point, which `_mul_fixed_digits()` has already scaled; the negation is
+        reduced modulo the field prime for the reason `_mul_precompute()` has.
+        The degenerate multipliers arrive where the ladder this replaces left
+        them: a multiple of the order leaves the odd form at the point at
+        infinity and the parity of an odd order keeps that answer, while one
+        less than the order leaves it there and the subtraction turns it into
+        the negation of this point, which is what that multiplier means.
+        """
+        window = _MUL_WINDOW
+        digits = self._fixed_digits(
+            other | 1, self._curve_digit_count(self.__curve, window), window
+        )
+        X3, Y3, Z3 = self._mul_fixed_digits(digits, window)
+
+        p = self.__curve.p()
+        X1, Y1, _ = self.__coords
+        # the product of the multiplier one below the odd form, which is the
+        # answer for an even multiplier; derived for every multiplier, and
+        # picked out by index only for the parity it belongs to
+        lowered = self._add(X3, Y3, Z3, X1, -Y1 % p, 1, p)
+        X3, Y3, Z3 = (lowered, (X3, Y3, Z3))[other & 1]
+
         if not Z3:
             return INFINITY
 
         return PointJacobi(self.__curve, X3, Y3, Z3, self.__order)
+
+    def _curve_fixed_usable(self, mult):
+        """
+        Whether `mult` is recoded against this point's curve.
+
+        Answers the one case `_fixed_ladder_usable()` leaves open: a point that
+        knows no order, which `_mul_curve_fixed()` multiplies at a fixed cost
+        taken from the curve.  Such a point carries no multiplication table --
+        building one needs an order, see `_maybe_precompute()`, and
+        `__setstate__()` discards a restored table there is no usable order for
+        -- so no table is consulted on that path.
+
+        A point flagged as a generator but built without an order is left out.
+        It cannot build the table its flag promises and `_maybe_precompute()`
+        refuses it, as releases up to 0.19.1 refused it, so it keeps the older
+        path where that refusal is reached exactly where it was reached before.
+        Nothing in this library multiplies a secret by such a point.  Both the
+        flag and the order are read from the point, never from the multiplier.
+        """
+        if self.__order or self.__generator:
+            return False
+        return self._curve_ladder_usable(self.__curve, mult)
 
     def __mul__(self, other):
         """Multiply point by an integer."""
@@ -1437,8 +1657,10 @@ class PointJacobi(AbstractPoint):
         if not self.__coords[1]:
             return INFINITY
         # To a plain integer before anything reads it, this method's own choice
-        # of ladder included, so every path below reads integer bits and
-        # refuses a non-integer alike.  Reads the type, never the value.
+        # of ladder included, so every path below reads integer bits and every
+        # one of them refuses a value standing for no integer alike.  A value
+        # already of an integer type is read for its type alone, never for the
+        # value it holds, so no secret multiplier is ever looked at.
         other = self._integer_multiplier(other)
         order = self.__order
         fixed = self._fixed_ladder_usable(order)
@@ -1453,16 +1675,27 @@ class PointJacobi(AbstractPoint):
             # still return what releases up to 0.19.1 returned; the answer for
             # one is picked out at the end of this method, after the work.
             multiplier = self._canonical_scalar(other, order)
+        elif self._curve_fixed_usable(other):
+            # No order to normalise the multiplier against, so its width comes
+            # from the curve, which bounds every order a point of it can have.
+            # This is the path an ECDH exchange takes against a remote public
+            # point decoded from an encoding, where the multiplier is the long
+            # term private key; `_mul_curve_fixed()` performs the same
+            # number of point operations for every multiplier it holds.
+            # Both of the shortcuts the fall-back below keeps are therefore
+            # left out here, for the reason the fixed path above leaves them
+            # out, and a multiplier of one is answered with this very object by
+            # the same index once the work is done.
+            return (self._mul_curve_fixed(other), self)[other == 1]
         else:
-            # An order the fixed length recoding cannot use, or none at all.
-            # Nothing to normalise against, so the two shortcuts below cannot
-            # make the work follow the multiplier any more than the ladder
-            # after them already does, and they keep returning what releases up
-            # to 0.19.1 returned: the point at infinity, and this very object
-            # -- order, generator flag and table included -- rather than an
-            # equal but freshly built one.  Signing, key generation and EdDSA
-            # do not reach this fall-back; ECDH with a decoded remote point
-            # does, as documented below the fixed ladder.
+            # An order the fixed length recoding cannot use, or a multiplier
+            # no group of this curve could hold.  Nothing to normalise against,
+            # so the two shortcuts below cannot make the work follow the
+            # multiplier any more than the ladder after them, and they keep
+            # returning what releases up to 0.19.1 returned: the point at
+            # infinity, and this very object -- order, generator flag and table
+            # included -- rather than an equal but freshly built one.  No
+            # multiplication of a secret arrives here, as documented below.
             if not other:
                 return INFINITY
             if other == 1:
@@ -1489,24 +1722,27 @@ class PointJacobi(AbstractPoint):
             # multiplier anyway.
             return (product, self)[other == 1]
 
-        # The order of this point is unknown or unusable, so the multiplier's
-        # width cannot be normalised.  The iteration count of the ladder below
-        # tracks the bit length of the multiplier -- a non-adjacent form can
-        # carry one digit past that length -- and the point operation count
-        # follows with it, so this ladder is not side channel hardened.
+        # The order of this point is unusable, or the multiplier is one that
+        # no group of this curve could hold, so its width cannot be normalised
+        # at all.  The iteration count of the ladder below tracks the bit
+        # length of the multiplier -- a non-adjacent form can carry one digit
+        # past that length -- and the point operation count follows with it, so
+        # this ladder is not side channel hardened.
         #
-        # What is claimed is narrower.  Every registered curve declares an
-        # order the fixed length recoding can use, so signing, key generation
-        # and EdDSA -- all of which multiply a generator built with its order
-        # -- never arrive here.  An ECDH exchange does when the remote public
-        # point was decoded from an encoding: those encodings carry no order
-        # and nothing attaches one afterwards, so this ladder is driven by the
-        # long term private key and its iteration count follows that key's bit
-        # length.  A remote key handed over as an `ecdsa.keys.VerifyingKey`
-        # this process derived from a `ecdsa.keys.SigningKey` does carry the
-        # order and takes the recoded path.  `SECURITY.md` records this
-        # residual exposure, which a caller constructing a point without a
-        # usable order keeps too.
+        # No multiplication of a secret arrives here.  Every registered curve
+        # declares an order the fixed length recoding can use, so signing, key
+        # generation and EdDSA -- all of which multiply a generator built with
+        # its order -- take the recoded ladder above; an ECDH exchange takes it
+        # too, against the curve where the remote public point was decoded from
+        # an encoding and so carries no order, and against the order where the
+        # remote key came from a `ecdsa.keys.SigningKey` in this process.
+        # What is left for this ladder is a point a caller built with an order
+        # the recoding cannot use -- an even one, or a group no wider than a
+        # single digit, neither of which any registered curve declares -- a
+        # negative multiplier of a point that knows no order, one wider than
+        # every group of its curve, and a point flagged as a generator without
+        # an order, which `_maybe_precompute()` refuses.  `SECURITY.md` records
+        # each of them.
         self = self.scale()
         X2, Y2, _ = self.__coords
         X3, Y3, Z3 = 0, 0, 0

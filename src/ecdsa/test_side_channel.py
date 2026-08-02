@@ -36,9 +36,10 @@ What is asserted is bounded in three ways, and each bound has tests of its own.
 Signing, key generation, EdDSA, and an ECDH exchange whose remote public point
 carries the curve order, schedule a number of point operations that follows the
 order alone; an exchange against a public point decoded from an encoding gets
-no order with it, keeps the multiplier driven ladder, and is the remaining
-decoded-key ECDH limitation, which `TestECDHKeyAgreement` measures on both
-sides.  A point built without a usable order keeps that older ladder too, and
+no order with it, so its count follows the curve instead, which bounds every
+order a point of that curve can have, and `TestECDHKeyAgreement` measures both.
+A point built with an order the recoding cannot use, or multiplied by a value no
+group of its curve could hold, keeps the multiplier driven ladder, and
 `TestEdgeCasePreservation` pins what it answers as a compatibility behaviour
 rather than a hardened one.  And no operation of this library is claimed to
 cost the same whatever its inputs are: a Python integer operation costs
@@ -60,10 +61,12 @@ signed digit, the nonce unpadding arithmetic and the Edwards raw scalar are
 where that tree fails.
 
 `TestMultiplierNormalisation` asserts the one change a caller can observe: a
-multiplier that is not an integer is refused, uniformly and before either
-ladder is chosen, rather than truncated or read as a zero.  The guard that
-answered a multiplier of one had to move behind that normalising step, or a
-nonce of one would never reach a ladder at all.
+multiplier is read for the integer it stands for, uniformly and before either
+ladder is chosen, and one that stands for no integer at all -- a fraction to
+truncate, a value read as a zero for being false -- is refused rather than
+answered with a multiple its caller never asked for.  The guard that answered
+a multiplier of one had to move behind that normalising step, or a nonce of
+one would never reach a ladder at all.
 """
 
 import os
@@ -75,9 +78,13 @@ try:
 except ImportError:
     import unittest
 
+import decimal
 import hashlib
+from decimal import Decimal
+from fractions import Fraction
 import hypothesis.strategies as st
 from hypothesis import given, settings
+from six import integer_types
 
 from . import ecdsa as ecdsa_module
 from . import ellipticcurve
@@ -301,6 +308,42 @@ def table_less_shape(curve, window=None):
     return additions, (digits - 1) * window + 1
 
 
+def order_less_shape(curve, window=None):
+    """
+    Additions and doublings a point that knows no order schedules.
+
+    The shape `table_less_shape()` describes, over a digit count taken from the
+    curve instead of from an order, and one addition more: a multiplier that
+    cannot be normalised against an order is made odd instead, and this point is
+    subtracted from the product of that odd form, both answers being derived for
+    every multiplier and one picked out by index.
+
+    The digit count follows Hasse's bound.  Every order a point of a curve over
+    a field of ``p`` elements can have is below ``2 ** (bit_length(p) + 1)``, so
+    that many bits, split into as few whole windows as possible, hold every
+    multiplier such a point can be given.  It is derived here from the field
+    prime and the window alone, for the reason `fixed_ladder_shape()` gives, and
+    it is not always the count an order of the same curve gives: a group
+    narrower than its field is recoded into fewer digits than the bound is.
+
+    Only the short Weierstrass points reach this, `ecdsa.keys` attaching an
+    order to every twisted Edwards point it builds.
+
+    :param curve: the curve the point belongs to
+    :param window: the digit width to use, the one the module is built with by
+        default
+
+    :return: the additions and the doublings the ladder schedules
+    :rtype: tuple of two int
+    """
+    if window is None:
+        window = ellipticcurve._MUL_WINDOW
+    width = bit_length(int(curve.curve.p())) + 1
+    digits = width // window + (1 if width % window else 0)
+    additions = digits + (1 << (window - 1)) - 1 + 1
+    return additions, (digits - 1) * window + 1
+
+
 def count_point_operations(point_class, work):
     """
     Count the point additions and doublings a call performs.
@@ -458,12 +501,13 @@ def multiplier(point, scalar):
 
 
 # The integer type wide field coordinates are held in.  Python 2 keeps values
-# past its machine word in `long`, so subclassing `int` there would truncate a
-# curve coordinate; Python 3 has the one type.
-try:
-    _INT_BASE = long
-except NameError:
-    _INT_BASE = int
+# past its machine word in a second, wider type, so subclassing the narrow one
+# there would truncate a curve coordinate; Python 3 has the one type.  `six`
+# names every integer type the running interpreter has in width order -- the
+# same tuple `_compat` and `numbertheory` read -- so its last entry is the
+# widest one, and naming it this way asks the question of `six` rather than of
+# the interpreter's own builtins.
+_INT_BASE = integer_types[-1]
 
 
 class NegationCounter(_INT_BASE):
@@ -649,12 +693,16 @@ def warm_generator(curve):
 # are the types this library actually meets, and these stand in for the two of
 # those that may not be installed, one of them answering with a value far wider
 # than any curve order.  The four after them answer with something that is not
-# an integer and are refused, as surely as a multiplier that offers no
-# `__index__()` at all: the normalising step reduces its answer modulo the
-# order of the point, and reducing the string "3" yields three, so accepting it
-# would multiply the point by a number its caller never asked for.  Each is
-# named for the type it answers with, because the refusal names the type of the
-# multiplier itself and the tests assert that message exactly.
+# an integer and are refused: the normalising step would reduce that answer
+# modulo the order of the point, and reducing the string "3" yields three, so
+# accepting it would multiply the point by a number its caller never asked for.
+# They are refused twice over, which is why they stay refused where a `float`
+# holding a whole number is taken for it: `int()` falls back to `__index__()`
+# when a value offers no `__int__()` and rejects a non-integer answer just as
+# `operator.index()` does, and none of these compares equal to an integer in
+# any case.  Each is named for the type it answers with, because the refusal
+# names the type of the multiplier itself and the tests assert that message
+# exactly.
 class Multiplier(object):
     def __index__(self):
         return 11
@@ -1780,21 +1828,72 @@ class TestNarrowOrderHardening(unittest.TestCase):
             for scalar in multipliers:
                 self.assertTrue(scalar % unusable, (unusable, scalar))
 
+    def test_a_narrow_group_without_an_order_follows_its_curve(self):
+        """
+        The same groups, with the order withheld from the point.
+
+        A point that knows no order is recoded against its curve instead, so
+        these groups get a fixed cost as well -- a different one, taken from the
+        field rather than from the order, and one addition more for the
+        correction that stands in for the order.  Every multiplier is checked
+        against a product built by repeated addition, which is what makes this a
+        claim about a ladder rather than about the nine multipliers a test
+        happened to pick.
+
+        The nine fields are between four and seven bits wide, which all round up
+        to the same two digits, so the count below is one literal for all nine.
+        A group of this size is where the odd multiples a digit names run past
+        the order and reach the point at infinity, which the affine entries of a
+        table cannot hold -- the reason `_fixed_window()` refuses an order this
+        narrow.  Without an order there is nothing to refuse it by, so the case
+        is asserted instead: an entry that is the point at infinity is added as
+        the point at infinity, which is what that multiple of the point is, so
+        the products are right and the count does not move.
+        """
+        window = ellipticcurve._MUL_WINDOW
+        for index in range(len(self.GROUPS)):
+            curve, x, y, order = self.group(index)
+            digits = PointJacobi._curve_digit_count(curve, window)
+            expected = (
+                digits + (1 << (window - 1)) - 1 + 1,
+                (digits - 1) * window + 1,
+            )
+            multiples = self.reference(curve, x, y, order)
+
+            counts = set()
+            for scalar in range(order + 3):
+                point = PointJacobi(curve, x, y, 1)
+                product, added, doubled = count_point_operations(
+                    PointJacobi, lambda: point * scalar
+                )
+
+                self.assertEqual(
+                    multiples[scalar % order], product, (order, scalar)
+                )
+                counts.add((added, doubled))
+
+            self.assertEqual(counts, set([expected]), order)
+            self.assertEqual(expected, (10, 5), order)
+
     def test_what_the_narrow_groups_looked_like_before(self):
-        # The same points without an order keep the multiplier-driven ladder,
-        # and its work varies with the multiplier -- which is what the tests
-        # above establish is gone once the order is known.  Without this the
-        # counts above could be constant because these groups are too small for
-        # anything to vary in.
+        """
+        The same groups, on the ladder releases up to 0.19.1 drove.
+
+        Without this the counts above could be constant because these groups are
+        too small for anything to vary in.  That ladder is still reached, by an
+        affine point that knows no order -- `test_ellipticcurve` counts the same
+        thing on a registered curve -- and its work varies with the multiplier on
+        every one of the nine, which is what the fixed counts above replace.
+        """
         for index in range(len(self.GROUPS)):
             curve, x, y, order = self.group(index)
             counts = set()
             for scalar in range(1, order):
-                point = PointJacobi(curve, x, y, 1)
-                _, adds, doubles = count_point_operations(
-                    PointJacobi, lambda: point * scalar
+                point = Point(curve, x, y)
+                _, profile = count_formula_calls(
+                    Point, ("double",), lambda: point * scalar
                 )
-                counts.add((adds, doubles))
+                counts.add(dict(profile)["double"])
 
             self.assertGreater(len(counts), 1, order)
 
@@ -1966,7 +2065,7 @@ class TestNarrowOrderHardening(unittest.TestCase):
 
 class TestECDHKeyAgreement(unittest.TestCase):
     """
-    The ECDH exposure of the advisory, and what it does not cover.
+    The ECDH exposure of the advisory, on both shapes of remote point.
 
     The advisory names key agreement alongside signing, and the secret there is
     worse than a nonce: it is the long term private key, reused for every
@@ -1974,26 +2073,26 @@ class TestECDHKeyAgreement(unittest.TestCase):
     instead of one observation each of many.  The multiplication that carries
     it is the remote public point multiplied by that key.
 
-    Whether that multiplication takes the fixed work path turns on one thing
-    only: whether the point reports its order.  A point built by multiplying a
-    curve generator does -- `keys.SigningKey.get_verifying_key()` builds its
-    public point that way, and a product reports the order of the point it came
-    from -- so an exchange against such a point costs what `table_less_shape()`
-    says, whatever the private key is.  None of the public point encodings
-    carries an order, though, so a point handed to
-    `keys.VerifyingKey.from_string()` or to one of its DER and PEM siblings
-    reports none, and a multiplication then has nothing to normalise a
-    multiplier against.  Such an exchange keeps the ladder of releases up to
-    0.19.1, whose number of doublings is exactly the bit length of the private
-    key.
+    That point arrives in one of two shapes, and the number of point operations
+    is fixed for both.  A point built by multiplying a curve generator reports
+    its order -- `keys.SigningKey.get_verifying_key()` builds its public point
+    that way, and a product reports the order of the point it came from -- so the
+    multiplier is normalised against that order and the exchange costs what
+    `table_less_shape()` says.  None of the public point encodings carries an
+    order, so a point handed to `keys.VerifyingKey.from_string()` or to one of
+    its DER and PEM siblings reports none; the width of the multiplier then
+    comes from the curve, which bounds every order a point of it can have, and
+    the exchange costs what `order_less_shape()` says -- the same shape, over a
+    digit count taken from the field, and one addition more for the correction
+    that stands in for the missing order.
 
-    That second case is a residual exposure rather than a fixed defect, and it
-    is asserted here as squarely as the fixed cost is: `SECURITY.md`, `README`
-    and `NEWS` all name it, and a test suite that quietly left it out would
-    give a reader no way to check what they say.  Closing it would mean
-    attaching an order where a point is decoded, in `ecdsa.keys` or
-    `ecdsa.ecdsa.Public_key`, and the remediation this belongs to is confined
-    to the scalar multiplication and nonce handling paths.
+    The two counts are different numbers and each of them is fixed, so what an
+    observer can tell them apart by is which shape of point they handed in
+    themselves.  Neither follows the private key.  In releases up to 0.19.1 the
+    decoded case spent exactly the bit length of that key in doublings, which is
+    the leak the advisory reports for ECDH and which these tests measure the
+    absence of; the counts below are exact, so what `SECURITY.md`, `README` and
+    `NEWS` say about either case cannot drift from the code.
 
     The exchanges are driven exactly as a caller would drive them: keys are
     generated, encoded to bytes where the case calls for it, decoded again and
@@ -2099,7 +2198,10 @@ class TestECDHKeyAgreement(unittest.TestCase):
         No public point encoding carries an order, and none of the decoders
         invents one, whether or not the caller asked for the point to be
         validated.  This is read from the point rather than assumed, because
-        every claim about the ladder a decoded key takes rests on it.
+        every claim about the recoding a decoded key takes rests on it: there is
+        no order for `PointJacobi._fixed_ladder_usable()` to accept, so it is
+        `PointJacobi._curve_fixed_usable()` that has to answer for the width,
+        and it does -- for a private key of every width the curve holds.
         """
         for curve in self.CURVES:
             raw = SigningKey.generate(curve=curve).get_verifying_key()
@@ -2109,29 +2211,36 @@ class TestECDHKeyAgreement(unittest.TestCase):
                     curve=curve,
                     validate_point=validate_point,
                 )
-                self.assertIsNone(decoded.pubkey.point.order())
+                point = decoded.pubkey.point
+                self.assertIsNone(point.order())
                 # and it builds no multiplication table either, not being
                 # marked as a curve generator
-                self.assertEqual(
-                    decoded.pubkey.point._PointJacobi__precompute, []
-                )
+                self.assertEqual(point._PointJacobi__precompute, [])
                 self.assertFalse(
-                    PointJacobi._fixed_ladder_usable(
-                        decoded.pubkey.point.order()
-                    )
+                    PointJacobi._fixed_ladder_usable(point.order())
                 )
+                # so the curve is what bounds the multiplier, for every width a
+                # private key of this curve can have and for the order itself
+                for width in self.private_key_widths(curve):
+                    self.assertTrue(
+                        point._curve_fixed_usable((1 << (width - 1)) + 12345),
+                        (curve.name, width),
+                    )
+                self.assertTrue(point._curve_fixed_usable(int(curve.order)))
 
-    def test_an_exchange_with_a_decoded_key_keeps_the_old_ladder(self):
+    def test_an_exchange_with_a_decoded_key_costs_the_curve_count(self):
         """
-        The residual exposure, measured rather than described.
+        The ECDH case of the advisory, measured rather than described.
 
-        A decoded remote point reports no order, so the multiplication by the
-        long term private key is the non-adjacent form ladder of releases up to
-        0.19.1, and its number of doublings is exactly the bit length of that
-        key.  This is what `SECURITY.md` discloses; the assertion is the exact
-        count, so the disclosure cannot drift from the code.
+        A decoded remote point reports no order, so the multiplier -- the long
+        term private key -- is recoded against the curve, and every private key
+        width costs the one count `order_less_shape()` names.  In releases up to
+        0.19.1 the doubling count of this exchange was exactly the bit length of
+        that key; the assertions below are that one count holds for every width
+        and that it is not the bit length of any of them.
         """
-        for curve in (NIST256p, BRAINPOOLP384r1):
+        for curve in self.CURVES:
+            expected = order_less_shape(curve)
             remote = VerifyingKey.from_string(
                 SigningKey.generate(curve=curve)
                 .get_verifying_key()
@@ -2139,54 +2248,92 @@ class TestECDHKeyAgreement(unittest.TestCase):
                 curve=curve,
                 validate_point=False,
             )
-            doublings = []
-            for width in self.private_key_widths(curve):
+            widths = self.private_key_widths(curve)
+            counts = []
+            for width in widths:
                 exchange = ECDH(
                     curve=curve, private_key=self.local_key(curve, width)
                 )
                 exchange.load_received_public_key(remote)
-                secret, _, count = count_point_operations(
+                secret, additions, doublings = count_point_operations(
                     point_class_of(curve),
                     exchange.generate_sharedsecret_bytes,
                 )
                 self.assertEqual(len(secret), curve.baselen)
-                self.assertEqual(count, width)
-                doublings.append(count)
-            # the count is a different one for every width, which is the leak
-            self.assertEqual(doublings, self.private_key_widths(curve))
+                counts.append((additions, doublings))
+
+            self.assertEqual(sorted(set(counts)), [expected], curve.name)
+            # more than one width was actually exchanged under, so that equality
+            # is an invariance and not a single measurement
+            self.assertGreater(len(counts), 2)
+            # and the doubling count is the bit length of none of those widths,
+            # which is what every one of them used to cost
+            self.assertNotIn(expected[1], widths)
+
+    def test_the_decoded_exchange_cost_is_the_count_it_should_be(self):
+        """
+        The count the decoded exchange is compared against, as literals.
+
+        Sixty five digits of four bits for a bound of 257, seven additions to
+        build the eight odd multiples of the point, one addition per digit, one
+        further addition for the correction that stands in for the missing
+        order, and a whole window of doublings between consecutive digits with
+        the window before the most significant digit skipped, plus the one
+        doubling that steps between odd multiples.
+
+        SECP112r2 is here because it is the one curve of the four where the
+        bound taken from the field is not the width taken from the order: its
+        group is 110 bits wide where its field is 112, so a point of it that
+        reports no order is recoded into one digit more than a point that does.
+        """
+        self.assertEqual(order_less_shape(NIST256p), (73, 257))
+        self.assertEqual(order_less_shape(SECP256k1), (73, 257))
+        self.assertEqual(order_less_shape(BRAINPOOLP384r1), (105, 385))
+        self.assertEqual(order_less_shape(SECP112r2), (37, 113))
+        # one addition more than a point that reports its order costs, wherever
+        # the group and the field are of the same width
+        for curve in (NIST256p, SECP256k1, BRAINPOOLP384r1):
+            additions, doublings = table_less_shape(curve)
             self.assertEqual(
-                len(set(doublings)), len(self.private_key_widths(curve))
+                order_less_shape(curve), (additions + 1, doublings), curve.name
             )
+        # and a whole digit more where they are not
+        self.assertEqual(table_less_shape(SECP112r2), (35, 109))
 
     def test_the_same_key_exchanges_at_both_costs(self):
         """
-        One private key, two remote points, two costs.
+        One private key, two remote points, two fixed costs.
 
         The same long term secret is multiplied by a point that reports the
-        order and by the very same point decoded from its encoding, and the two
-        multiplications cost differently: the fixed count in the first case and
-        a count that follows the secret in the second.  Nothing about the
-        secret decides which path is taken -- only the point does.
+        order and by the very same point decoded from its encoding.  The two
+        multiplications cost differently -- the decoded one pays the addition
+        that stands in for the order it does not know -- and neither cost follows
+        the secret: three private key widths give the same two counts, so what an
+        observer tells them apart by is which shape of point they handed in
+        themselves.  The secret is the same either way, the two points being the
+        same point.
         """
         curve = NIST256p
         peer = SigningKey.generate(curve=curve).get_verifying_key()
         decoded = VerifyingKey.from_string(peer.to_string(), curve=curve)
-        secrets = []
         counts = []
-        for remote in (peer, decoded):
-            exchange = ECDH(
-                curve=curve, private_key=self.local_key(curve, 128)
-            )
-            exchange.load_received_public_key(remote)
-            secret, additions, doublings = count_point_operations(
-                point_class_of(curve), exchange.generate_sharedsecret_bytes
-            )
-            secrets.append(secret)
-            counts.append((additions, doublings))
-        # the same secret either way: the two points are the same point
-        self.assertEqual(secrets[0], secrets[1])
-        self.assertEqual(counts[0], table_less_shape(curve))
-        self.assertEqual(counts[1][1], 128)
+        for width in (64, 128, 255):
+            secrets = []
+            for remote in (peer, decoded):
+                exchange = ECDH(
+                    curve=curve, private_key=self.local_key(curve, width)
+                )
+                exchange.load_received_public_key(remote)
+                secret, additions, doublings = count_point_operations(
+                    point_class_of(curve), exchange.generate_sharedsecret_bytes
+                )
+                secrets.append(secret)
+                counts.append((additions, doublings))
+            # the same secret from both shapes of the same point
+            self.assertEqual(secrets[0], secrets[1])
+
+        self.assertEqual(counts[0::2], [table_less_shape(curve)] * 3)
+        self.assertEqual(counts[1::2], [order_less_shape(curve)] * 3)
         self.assertNotEqual(counts[0], counts[1])
 
     def test_both_peers_agree_on_the_secret(self):
@@ -5037,10 +5184,11 @@ class TestEdgeCasePreservation(unittest.TestCase):
     index once that work is done.  So the answers themselves are the ones those
     releases gave, down to the identity of the object: the very point that was
     multiplied for a multiplier of one, and the point at infinity for a
-    multiplier of zero.  A point whose order is too small for the recoding, or
-    which knows no order at all, keeps the shortcuts, the reduction modulo
-    twice the order and the ladder releases up to 0.19.1 drove with it, which
-    no other test in this file visits.
+    multiplier of zero.  A point that knows no order pays the same way, its
+    width coming from its curve; what keeps the shortcuts, the reduction modulo
+    twice the order and the ladder releases up to 0.19.1 drove with it is a point
+    whose order is too small for the recoding, and a multiplier no group of the
+    curve could hold, which no other test in this file visits.
     """
 
     # the curve the advisory names and the smallest registered curve, which
@@ -5247,15 +5395,16 @@ class TestEdgeCasePreservation(unittest.TestCase):
 
     def test_a_point_that_knows_no_order_agrees_with_one_that_does(self):
         """
-        The two ladders answer every multiplier the same way.
+        The two recodings answer every multiplier the same way.
 
-        A point that knows no order cannot have its multiplier normalised, so
-        it keeps the ladder whose number of point operations follows the
-        multiplier.  That ladder is not hardened, and nothing inside this
-        library multiplies a secret by such a point -- a public point decoded
-        from an encoding has the order attached by `ecdsa.ecdsa.Public_key`,
-        see `TestECDHKeyAgreement` -- but it still has to compute the same
-        points as the hardened one.
+        A point that knows no order has its multiplier recoded against its curve
+        rather than against an order, which is what an ECDH exchange against a
+        decoded public point takes -- `ecdsa.keys` attaches no order when it
+        decodes one, see `TestECDHKeyAgreement`.  The two recodings are different
+        widths and, for a multiplier past the bound the curve gives, different
+        ladders, so that they arrive at the same points is asserted rather than
+        assumed.  ``2 * order + 3`` is the multiplier that reaches past that
+        bound on SECP160r1, whose group is wider than its field.
         """
         for curve in self.EDGE_CURVES:
             order = int(curve.order)
@@ -5391,40 +5540,52 @@ class TestEdgeCasePreservation(unittest.TestCase):
 
 class TestMultiplierNormalisation(unittest.TestCase):
     """
-    A multiplier that is not an integer is refused rather than truncated.
+    A multiplier is read for the integer it stands for, or refused.
 
     Unlike the class above this describes behaviour the countermeasure
     introduced, and it is asserted here because everything the countermeasure
-    derives from a multiplier is integer arithmetic: the recodings read the
-    bits of the multiplier with shifts, masks and divisions, so a value that
-    merely converts to an integer -- the decimal digits of a string, or a float
-    truncated towards zero -- would multiply a point by a number its caller
-    never asked for, and a value that does not convert at all would surface as
-    whichever error the first arithmetic operation happened to raise, which
-    differs between the three integer implementations this module can be built
-    on.  Asking the multiplier for its lossless integer value refuses both with
-    one and the same exception.
+    derives from a multiplier is integer arithmetic: the recodings read the bits
+    of the multiplier with shifts, masks and divisions, so a value with a
+    fraction to truncate -- a half, the decimal digits of a string -- would
+    multiply a point by a number its caller never asked for, and a value that
+    is not numeric at all would surface as whichever error the first arithmetic
+    operation happened to raise, which differs between the three integer
+    implementations this module can be built on.  Asking the multiplier for the
+    integer it stands for answers both.
 
     The step that asks is `AbstractPoint._integer_multiplier()`, and it comes
     ahead of everything else a multiplication does with the multiplier -- ahead
     of the choice of ladder, ahead of the shortcut for a multiplier of zero and
-    of one.  It has to: it reads the *type* of the multiplier and never its
-    value, so a value that reached a ladder without passing through it would be
-    a value the work of a multiplication could be told apart by, which is the
-    property CVE-2024-23342 is about.  Reading only the type is also what makes
-    the refusal uniform: `int`, `bool` and the ``mpz`` of both gmpy releases are
-    accepted whatever they hold, and everything else is refused whatever it
-    holds, so no assertion in this file depends on which of the three integer
-    backends the module was built on.
+    of one.  It has to: a value that reached a ladder without passing through it
+    would be a value the work of a multiplication could be told apart by, which
+    is the property CVE-2024-23342 is about.  It asks in two steps, and only the
+    first of them is ever reached by a multiplier this library itself forms:
 
-    Releases up to 0.19.1 answered some of these values and refused the rest,
-    each by whichever operation happened to reach it first, so the refusal here
-    is a new exception on a public operation for the ones they answered and a
-    differently worded one for the rest.  That is a deliberate part of the
-    change and not an oversight: a float of one used to be answered with the
-    point, because the guard for a multiplier of one compared for equality, and
-    that guard now sits *behind* the normalising step -- it had to, or a nonce
-    of one would never reach a ladder at all.
+    * `operator.index()`, which reads the type and never the value.  `int`,
+      `bool` and the ``mpz`` of both gmpy releases answer it whatever they hold,
+      so no assertion in this file depends on which of the three integer
+      backends the module was built on, and no secret is ever looked at.
+    * a conversion, for a value of some other type that still stands for one
+      integer and nothing else -- a `float`, `Fraction` or `Decimal` with no
+      fractional part.  Releases up to 0.19.1 answered those with the multiple
+      that integer asks for and so does this one, but the integer is what
+      reaches the ladders now and the value itself never reaches the
+      arithmetic.  That is what closes off release 1.17 of the older of the two
+      gmpy bindings, which answers a float taken modulo a number as wide as a
+      curve order by attempting an allocation of exabytes and taking the
+      interpreter down with it.
+
+    What is refused is what stands for no one integer, and that is the one
+    change a caller can observe.  Releases up to 0.19.1 answered some of those
+    values -- with a multiple no caller asked for, with the point itself, or
+    with the point at infinity for a value that was merely false -- and each of
+    the rest by whichever operation happened to reach it first, so the refusal
+    here is a new exception on a public operation for the first group and a
+    differently worded one for the second.  Both are deliberate: a fraction of
+    one half was answered with the point, because a half truncates towards a
+    single set digit, and the guard that answered a multiplier of one now sits
+    *behind* the normalising step -- it had to, or a nonce of one would never
+    reach a ladder at all.
 
     The point at infinity is the one exception, and it is asserted apart from
     the rest: it is answered before the multiplier is looked at at all, exactly
@@ -5464,23 +5625,25 @@ class TestMultiplierNormalisation(unittest.TestCase):
         `ecdsa.ellipticcurve.GMPY` records whether an ``mpz`` was found, and
         when one was the multiplier a caller hands a multiplication may be one,
         since this module does its own arithmetic with them.  Either way the
-        value comes back as a plain `int` of the same magnitude -- the recodings
-        that follow index a list with it, which an ``mpz`` cannot be used for on
-        every release.
+        value comes back as one of the plain integer types of the interpreter
+        and of the same magnitude -- the recodings that follow index a list with
+        it, which an ``mpz`` cannot be used for on every release.
         """
         for value in (0, 1, 7, 1 << 300, int(NIST256p.order)):
             normalised = PointJacobi._integer_multiplier(value)
 
             self.assertEqual(normalised, value)
-            self.assertIsInstance(normalised, int)
+            self.assertIsInstance(normalised, integer_types)
         if ellipticcurve.GMPY:
+            mpz_type = type(ellipticcurve.mpz(1))
             for value in (0, 1, 7, int(NIST256p.order)):
                 normalised = PointJacobi._integer_multiplier(
                     ellipticcurve.mpz(value)
                 )
 
                 self.assertEqual(normalised, value)
-                self.assertIsInstance(normalised, int)
+                self.assertIsInstance(normalised, integer_types)
+                self.assertNotIsInstance(normalised, mpz_type)
 
     def test_a_lossless_integer_that_is_not_an_integer_is_refused(self):
         """
@@ -5537,16 +5700,244 @@ class TestMultiplierNormalisation(unittest.TestCase):
             NIST256p.generator * 3, INFINITY, "the value it would have used"
         )
 
-    def test_a_value_that_is_not_an_integer_is_refused(self):
-        values = (1.5, 2.0, "3", None, b"\x01", [1], (1,), complex(1, 0))
+    def test_a_value_that_stands_for_one_integer_is_taken_for_it(self):
+        """
+        A `float`, `Fraction` or `Decimal` with no fractional part.
+
+        None of them is of an integer type, so none of them answers
+        `operator.index()`, but each one stands for exactly one integer and is
+        taken for it -- which is the multiple releases up to 0.19.1 answered
+        them with.  The integer is what is handed on: a value that reached the
+        arithmetic itself would be a float taken modulo a number as wide as a
+        curve order, which release 1.17 of the older gmpy binding answers by
+        attempting an allocation of exabytes.
+        """
+        cases = (
+            (0.0, 0),
+            (1.0, 1),
+            (2.0, 2),
+            (3.0, 3),
+            (-3.0, -3),
+            (1e300, int(1e300)),
+            (Fraction(4, 2), 2),
+            (Fraction(-6, 3), -2),
+            (Fraction(7, 1), 7),
+            (Decimal("2"), 2),
+            (Decimal("-4"), -4),
+            (Decimal("1e3"), 1000),
+            # wider than any curve order, and held exactly
+            (float(1 << 600), 1 << 600),
+        )
+        for value, expected in cases:
+            for point_class in (PointJacobi, PointEdwards, Point):
+                normalised = point_class._integer_multiplier(value)
+
+                self.assertEqual(normalised, expected, repr(value))
+                self.assertIsInstance(normalised, integer_types)
+
+    def test_a_value_that_stands_for_no_integer_is_refused(self):
+        """
+        Everything with something to lose on the way to an integer.
+
+        A fraction of one half loses the half; a float that is not a number or
+        is larger than any converts to no integer at all; the digits of a
+        string are not the number they spell; a complex number and a value that
+        is merely false stand for nothing.  Releases up to 0.19.1 answered the
+        first, third and fifth groups with a multiple no caller had asked for
+        -- one half with the point itself, since a half truncates towards a
+        single set digit -- and this is the one change to a public operation
+        those answers cost.
+        """
+        values = (
+            0.5,
+            1.5,
+            2.5,
+            -1.5,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            Fraction(1, 2),
+            Fraction(-1, 2),
+            Decimal("2.5"),
+            Decimal("nan"),
+            complex(1, 0),
+            complex(1, 1),
+            "3",
+            "",
+            b"\x01",
+            b"",
+            [1],
+            [],
+            (1,),
+            (),
+            None,
+        )
         for value in values:
             for point_class in (PointJacobi, PointEdwards, Point):
+                self.assertRaises(
+                    TypeError,
+                    point_class._integer_multiplier,
+                    value,
+                )
+
+    def test_a_value_that_only_converts_to_an_integer_is_refused(self):
+        """
+        Converting is not enough: the two have to still compare equal.
+
+        A class answering `int()` with a number it does not itself equal is
+        answering with a number its caller never asked for, exactly as the
+        digits of a string do, so the conversion alone is not what the
+        multiplier is accepted on.  Releases up to 0.19.1 refused this one as
+        well, by way of whichever arithmetic reached it first.
+        """
+
+        class Truncating(object):
+            def __int__(self):
+                return 5
+
+        for point_class in (PointJacobi, PointEdwards, Point):
+            self.assertRaises(
+                TypeError, point_class._integer_multiplier, Truncating()
+            )
+        self.assertEqual(int(Truncating()), 5, "the value it would have used")
+
+    def test_a_value_losing_nothing_and_converting_to_another_is_refused(self):
+        """
+        Both halves of the question are asked, and both are load-bearing.
+
+        A value is accepted on two answers: that dividing it by one leaves it
+        equal to itself, so it has no fraction to lose, and that the integer
+        built from it still equals it, so that integer is the multiple asked
+        for.  The first without the second is not enough.  A type answering
+        that it loses nothing and then converting to a different number is
+        exactly the case the second answer exists to catch, and this is the
+        only way to reach it: every `float`, `Fraction` and `Decimal` that
+        divides to itself also converts to a number equal to itself, so
+        dropping the conversion check would go unnoticed without a type built
+        to disagree.
+
+        Refused rather than answered, and refused for both ways of
+        disagreeing -- converting to another number, and refusing to convert at
+        all with something other than the `TypeError` a non-numeric type
+        raises.
+        """
+
+        class Settled(object):
+            """Divides to itself, so it claims to have nothing to lose."""
+
+            def __floordiv__(self, other):
+                return self
+
+            def __eq__(self, other):
+                return other is self
+
+            def __ne__(self, other):
+                return other is not self
+
+            def __hash__(self):
+                return 0
+
+        class SettledButOther(Settled):
+            def __int__(self):
+                return 7
+
+        class SettledButRefusing(Settled):
+            def __int__(self):
+                raise ArithmeticError("no integer of mine")
+
+        other = SettledButOther()
+        refusing = SettledButRefusing()
+
+        # the stand-ins behave the same on either interpreter, which is what
+        # makes them a fair test of the gate rather than of Python: each equals
+        # nothing but itself, differs from everything else -- Python 2 does not
+        # derive that from equality -- and stays hashable, which Python 3
+        # otherwise takes away from a type that defines equality
+        self.assertTrue(other != refusing)
+        self.assertFalse(other != other)
+        self.assertEqual(len(set([other, refusing])), 2)
+
+        # the first half of the question answers yes for both of them
+        self.assertTrue(other == other // 1)
+        self.assertTrue(refusing == refusing // 1)
+        # and the second half is what refuses them
+        self.assertEqual(int(other), 7)
+        self.assertFalse(int(other) == other)
+        self.assertRaises(ArithmeticError, int, refusing)
+
+        for point_class in (PointJacobi, PointEdwards, Point):
+            for value in (other, refusing):
                 self.assertRaises(
                     TypeError, point_class._integer_multiplier, value
                 )
 
+    def test_a_value_naming_an_integer_its_own_type_cannot_hold(self):
+        """
+        Refused, and refused without building the integer to find out.
+
+        Whether a value has a fraction is asked of the value in its own type,
+        so a `Decimal` whose integral part is wider than the precision of the
+        `decimal` context the caller set is refused rather than converted --
+        which is what keeps `Decimal("1e1000000000")` from asking for the
+        allocation of a billion digits before being refused anyway.  The
+        boundary is the caller's own context and moves with it, exactly as it
+        moved for releases up to 0.19.1, which reduced such a value modulo twice
+        the order of the point and were answered by the same context with
+        `InvalidOperation`.  Those releases allowed one digit more than this,
+        their reduction needing only the remainder to fit where this needs the
+        integral part to; a `Decimal` of exactly that width is the one value
+        they answered correctly that is refused here, and it is refused rather
+        than answered wrongly.
+
+        A `Fraction` carries its own integer and has no such limit, so a wide
+        one is accepted; asserted alongside, so the limit is shown to be the
+        type's own and not a bound this library imposes.
+        """
+        with decimal.localcontext() as context:
+            context.prec = 28
+            self.assertEqual(
+                PointJacobi._integer_multiplier(Decimal("1e27")), 10**27
+            )
+            self.assertRaises(
+                TypeError,
+                PointJacobi._integer_multiplier,
+                Decimal("1e28"),
+            )
+            self.assertRaises(
+                TypeError,
+                PointJacobi._integer_multiplier,
+                Decimal("1e1000000000"),
+            )
+            context.prec = 50
+            self.assertEqual(
+                PointJacobi._integer_multiplier(Decimal("1e28")), 10**28
+            )
+            self.assertEqual(
+                PointJacobi._integer_multiplier(Decimal("1e49")), 10**49
+            )
+            self.assertRaises(
+                TypeError,
+                PointJacobi._integer_multiplier,
+                Decimal("1e60"),
+            )
+        self.assertEqual(
+            PointJacobi._integer_multiplier(Fraction(10**600, 1)), 10**600
+        )
+        self.assertRaises(
+            TypeError,
+            PointJacobi._integer_multiplier,
+            Fraction(10**600, 3),
+        )
+
     def test_the_refusal_names_the_type_it_refused(self):
-        for value, name in ((1.5, "float"), ("3", "str"), (None, "NoneType")):
+        for value, name in (
+            (1.5, "float"),
+            ("3", "str"),
+            (None, "NoneType"),
+            (Fraction(1, 2), "Fraction"),
+            (Decimal("2.5"), "Decimal"),
+            (complex(1, 0), "complex"),
+        ):
             try:
                 PointJacobi._integer_multiplier(value)
                 self.fail("a %s was accepted as a multiplier" % name)
@@ -5556,37 +5947,48 @@ class TestMultiplierNormalisation(unittest.TestCase):
                     "multiplier must be an integer, not %s" % name,
                 )
 
-    def test_a_multiplication_refuses_it_too(self):
+    def multiplication_points(self):
         """
-        Reached through the operator, on every shape of point.
+        Every shape of point a multiplier can be handed to.
 
-        Every value that is not an integer reaches the normalising step and is
-        refused there, whatever it happens to equal.  A float of one is
-        included deliberately: it used to be answered with the point, because
-        the guard that answered a multiplier of one compared for equality and a
-        float compares equal to the integer it holds.  That guard now sits
-        behind the normalising step -- it had to, or a nonce of one would never
-        have reached a ladder -- so the value is refused like every other
-        non-integer, which is also what a float of two has always been.  A
-        complex number of one is refused for the same reason, and a value that
-        is merely false -- a `None`, an empty sequence -- is refused rather than
-        read as the zero those releases read it as.
+        Both ladders of both projective classes and both of the points that
+        fall through to an older one, so that a value refused or accepted by
+        one of them is asserted to be refused or accepted by all.
         """
-        curve = NIST256p
-        points = (
-            warm_generator(curve),
-            rebuilt_generator(curve),
-            rebuilt_generator(curve, False),
-            order_less_point(curve),
+        return (
+            warm_generator(NIST256p),
+            rebuilt_generator(NIST256p),
+            rebuilt_generator(NIST256p, False),
+            order_less_point(NIST256p),
             warm_generator(Ed25519),
             rebuilt_generator(Ed25519, False),
             order_less_point(Ed25519),
         )
-        for point in points:
+
+    def test_a_multiplication_refuses_it_too(self):
+        """
+        Reached through the operator, on every shape of point.
+
+        Every value standing for no one integer reaches the normalising step
+        and is refused there, whatever it happens to equal.  A fraction of one
+        half is included deliberately: it used to be answered with the point,
+        because a half truncates towards a single set digit, and a complex
+        number of one for the same reason, because the guard that answered a
+        multiplier of one compared for equality.  That guard now sits behind the
+        normalising step -- it had to, or a nonce of one would never have
+        reached a ladder.  A value that is merely false -- a `None`, an empty
+        sequence -- is refused rather than read as the zero those releases read
+        it as.
+        """
+        for point in self.multiplication_points():
             for value in (
-                1.0,
+                0.5,
                 1.5,
-                2.0,
+                2.5,
+                Fraction(1, 2),
+                Decimal("2.5"),
+                float("nan"),
+                float("inf"),
                 "3",
                 complex(1, 0),
                 None,
@@ -5600,21 +6002,77 @@ class TestMultiplierNormalisation(unittest.TestCase):
             ):
                 self.assertRaises(TypeError, point.__mul__, value)
 
-    def test_the_affine_multiplication_refuses_it_too(self):
+    def test_a_multiplication_takes_it_for_the_integer_too(self):
         """
-        The affine implementation refuses it in the one place as well.
+        And answers with the same point the integer itself is answered with.
+
+        On every shape of point, so that the two projective ladders, the two
+        that fall through to an older one and the affine implementation all
+        answer alike.  Releases up to 0.19.1 answered a float of two with the
+        double on the projective classes and refused it on the affine one,
+        where the ladder read the multiplier's bits directly; one step reading
+        the multiplier for all three is what makes the three agree.
+        """
+        cases = (
+            (0.0, 0),
+            (1.0, 1),
+            (2.0, 2),
+            (3.0, 3),
+            (12.0, 12),
+            (Fraction(4, 2), 2),
+            (Fraction(9, 1), 9),
+            (Decimal("2"), 2),
+            (Decimal("1e3"), 1000),
+        )
+        generator = NIST256p.generator
+        order = int(NIST256p.order)
+        points = self.multiplication_points() + (
+            Point(generator.curve(), generator.x(), generator.y(), order),
+            Point(generator.curve(), generator.x(), generator.y()),
+        )
+        for point in points:
+            for value, expected in cases:
+                self.assertEqual(point * value, point * expected, repr(value))
+        # and the multiple is the one asked for rather than the point itself
+        self.assertNotEqual(generator * 2.0, generator)
+        self.assertEqual(generator * 0.0, INFINITY)
+
+    def test_a_float_wider_than_the_order_is_the_integer_it_holds(self):
+        """
+        A float holds an integer exactly or holds no integer at all.
+
+        One larger than the order of the curve is reduced by the ladder like
+        any other integer of that size, so it is asserted against that integer
+        rather than against a multiple of the generator.  Releases up to 0.19.1
+        reduced the float itself modulo twice the order, which is the operation
+        that takes release 1.17 of the older gmpy binding down.
+        """
+        generator = NIST256p.generator
+        for value in (1e300, 2.0**300, float(1 << 400)):
+            self.assertEqual(
+                generator * value,
+                generator * int(value),
+                repr(value),
+            )
+            self.assertEqual(
+                PointJacobi._integer_multiplier(value), int(value)
+            )
+
+    def test_the_affine_multiplication_reads_it_in_the_one_place_too(self):
+        """
+        The affine implementation reads the multiplier in the one place as well.
 
         Whether the point knows its order or not, the multiplier reaches the
-        normalising step before anything is done with it, so the caller is
-        handed a `TypeError` rather than a point it never asked for.  Releases
-        up to 0.19.1 reduced the multiplier modulo the order of the point
-        first, which refused a string and a `None` by way of whichever error
-        the reduction happened to raise; a float got as far as the reduction
-        itself, and release 1.17 of the older of the two gmpy bindings answers
-        a float taken modulo an integer as wide as a curve order by attempting
-        an allocation of exabytes and taking the interpreter down with it.
-        Normalising first is what closes that off, which is why a float is
-        handed to both points here.
+        normalising step before anything is done with it, so a value standing
+        for no integer is refused there rather than answered with a point the
+        caller never asked for.  Releases up to 0.19.1 reduced the multiplier
+        modulo the order of the point first and then read its bits directly,
+        which refused a string, a `None` and a float of two by way of whichever
+        error the reduction or the first mask happened to raise, and answered a
+        fraction of one half with the point.  Release 1.17 of the older of the
+        two gmpy bindings answers a float taken modulo an integer as wide as a
+        curve order by attempting an allocation of exabytes and taking the
+        interpreter down with it, so a float is handed to both points here.
 
         The point at infinity is asserted apart from the two: it is answered
         before the multiplier is looked at at all, exactly as it was before.
@@ -5628,12 +6086,78 @@ class TestMultiplierNormalisation(unittest.TestCase):
             self.assertRaises(TypeError, point.__mul__, "3")
             self.assertRaises(TypeError, point.__mul__, None)
             self.assertRaises(TypeError, point.__mul__, [1])
-            self.assertRaises(TypeError, point.__mul__, 1.0)
+            self.assertRaises(TypeError, point.__mul__, 0.5)
             self.assertRaises(TypeError, point.__mul__, 1.5)
-            self.assertRaises(TypeError, point.__mul__, 2.0)
+            self.assertRaises(TypeError, point.__mul__, 2.5)
+            self.assertRaises(TypeError, point.__mul__, Fraction(1, 2))
+            # and the two that stand for an integer are taken for it, which is
+            # what the projective classes have always answered them with
+            self.assertEqual(point * 1.0, point * 1)
+            self.assertEqual(point * 2.0, point * 2)
+            self.assertEqual(point * Fraction(4, 2), point * 2)
+            self.assertEqual(point * Decimal("2"), point * 2)
 
         self.assertEqual(INFINITY * 1.5, INFINITY)
         self.assertEqual(INFINITY * None, INFINITY)
+
+    def test_exactly_which_answers_releases_up_to_0_19_1_gave_are_kept(self):
+        """
+        The whole of the observable change, value by value.
+
+        Every value below was answered or refused by those releases on the
+        projective classes, and the two groups are what the normalising step
+        divides them into.  The first group is answered exactly as it was, so
+        nothing a caller could have relied on for a multiple is lost.  The
+        second is refused, and the comment against each records what those
+        releases answered it with: a multiple no caller asked for, the point
+        itself for a value truncating towards a single set digit, or the point
+        at infinity for a value that was merely false.  The third is refused as
+        it was refused before, with a message naming the type instead of
+        whichever operation reached it first.
+
+        Asserted with the multiples spelled out rather than derived, so that a
+        gate accepting or refusing one value more than it should fails here.
+        """
+        point = warm_generator(NIST256p)
+        kept = (
+            (1.0, 1),
+            (2.0, 2),
+            (3.0, 3),
+            (Fraction(4, 2), 2),
+            (Fraction(6, 2), 3),
+            (Decimal("2"), 2),
+            (Decimal("3"), 3),
+        )
+        for value, multiple in kept:
+            self.assertEqual(point * value, point * multiple, repr(value))
+
+        refused = (
+            0.5,  # answered with the point itself
+            2.5,  # answered with the triple
+            Fraction(1, 2),  # answered with the point itself
+            Decimal("2.5"),  # answered with the triple
+            complex(1, 0),  # answered with the point itself
+            None,  # answered with the point at infinity
+            [],  # answered with the point at infinity
+            (),  # answered with the point at infinity
+            "",  # answered with the point at infinity
+            b"",  # answered with the point at infinity
+        )
+        already_refused = ("3", [1], (1,), b"\x01")
+        for value in refused + already_refused:
+            try:
+                point * value
+                self.fail("%r was accepted as a multiplier" % (value,))
+            except TypeError as error:
+                self.assertEqual(
+                    str(error),
+                    "multiplier must be an integer, not %s"
+                    % type(value).__name__,
+                    repr(value),
+                )
+        self.assertEqual(len(kept), 7)
+        self.assertEqual(len(refused), 10)
+        self.assertEqual(len(already_refused), 4)
 
     def test_the_point_at_infinity_is_answered_before_any_of_this(self):
         """

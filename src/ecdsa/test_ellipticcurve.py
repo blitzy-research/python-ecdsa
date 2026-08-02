@@ -665,9 +665,14 @@ class TestAffineMultiplicationCost(unittest.TestCase):
         above measures, and a point that cannot use its order does not reach
         it.  The number of point operations that ladder performs follows the
         multiplier, so it is not side channel hardened; it is kept as it is
-        because a point without an order still has to multiply.  Signing and
-        key generation use ordered generators; ECDH with a decoded peer key
-        remains the documented orderless secret-bearing exception.
+        because a point without an order still has to multiply, and no secret of
+        this library reaches it.  Signing and key generation use ordered
+        generators, and `ecdsa.ecdsa.Public_key` refuses a generator that
+        declares no order at all, so an affine point without one is only ever
+        multiplied by a value its caller chose.  The Jacobi coordinate
+        implementation, which is what an ECDH exchange against a decoded peer key
+        multiplies, recodes such a point against its curve instead; see
+        `PointJacobi._curve_fixed_usable()` and `test_side_channel`.
         """
         order_less = Point(self.c192, Gx, Gy)
         for multiplier in (1, 2, 0xDEADBEEF12345678):
