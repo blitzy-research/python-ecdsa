@@ -261,7 +261,18 @@ OpenSSL. [pyca/cryptography](https://cryptography.io) is one example of such
 a wrapper. The primary use-case of this library is as a portable library for
 interoperability testing and as a teaching tool.
 
-**This library does not protect against side-channel attacks.**
+**This library does not protect against side-channel attacks in general, and
+makes no constant-time guarantee for any operation.** One reported timing side
+channel has been narrowed, and only that one: the number of elliptic curve
+point operations that signing, key generation, EdDSA signing and an ECDH
+exchange schedule is now fixed by the public parameters of the curve rather
+than by the secret they are performed with -- by its order where the point
+carries one, and by its field where the point carries no order, as a remote
+public point decoded from an encoding does. One rare exception survives on the
+Edwards curves, where at most two multipliers per order cost a single doubling
+beyond that schedule. What the change does and does not cover is summarised
+below and set out in full in [`SECURITY.md`][4]; read that before relying on
+any of it.
 
 Do not allow attackers to measure how long it takes you to generate a key pair
 or sign a message. Do not allow attackers to run code on the same physical
@@ -271,21 +282,141 @@ computer uses while generating the key pair or signing a message. Do not allow
 attackers to measure RF interference coming from your computer while generating
 a key pair or signing a message. Note: just loading the private key will cause
 key pair generation. Other operations or attack vectors may also be
-vulnerable to attacks. **For a sophisticated attacker observing just one
-operation with a private key will be sufficient to completely
-reconstruct the private key**.
+vulnerable to attacks. Against the power analysis, RF and same-machine attacks
+in that list this library implements no countermeasure whatsoever. **Some local
+physical or microarchitectural attacks may recover key material from very few
+observations; this library provides no protection against them.**
 
-Please also note that any Pure-python cryptographic library will be vulnerable
-to the same side-channel attacks. This is because Python does not provide
-side-channel secure primitives (with the exception of
-[`hmac.compare_digest()`][3]), making side-channel secure programming
-impossible.
+### Nonce bit-length hardening (CVE-2024-23342)
+
+[CVE-2024-23342][5], published as [GHSA-wj6h-64fc-37mp][6] and as
+PYSEC-2026-1325, reports a [Minerva][7] class timing attack against this
+library: the time `SigningKey.sign_digest()` took followed the bit length of
+the per-signature nonce, so an attacker able to ask for enough timed signatures
+under one key learned a few bits of every nonce and reassembled those partial
+leaks into the long-term private key by lattice reduction. Key generation and
+ECDH key agreement multiply by the private key over the same code and were
+affected the same way, and EdDSA signing multiplies by a per signature value of
+its own. Signature verification, whose multipliers are public as soon as the
+signature is, was never affected and has deliberately been left alone.
+
+**What is now hidden** is the number of elliptic curve point operations. Where
+a point knows an order the recoding can use -- which is every curve this
+library registers -- the multiplier is normalised to an odd representative
+between that order and three times it, and recoded into a fixed length sequence
+of digits none of which is zero, so how many point additions and doublings a
+multiplication *schedules* follow that public order and nothing else. On
+NIST256p signing and key generation schedule 65 additions and no doublings at
+all once the generator has built its precomputation table, whatever the nonce,
+where the older ladder ranged over dozens of distinct counts. Building that
+table, and multiplying a point that carries no table as ECDH does, each settle
+on a count of their own in the same way.
+
+**What is not hidden** is the cost of an individual operation. Python integers
+are variable width and the field arithmetic deliberately skips the reduction
+modulo the field prime where that is faster, so **a residual timing signal
+remains, this is not a constant-time implementation, and no such claim is
+made** -- every warning above continues to apply, and power analysis,
+electromagnetic emanation, cache timing and other microarchitectural channels
+are not addressed anywhere in this library. Three coverage limits are worth
+naming here, and [`SECURITY.md`][4] gives all of them in full:
+
+* the scheduled count is the whole cost of every multiplier except at most two
+  residues of any order, which a twisted Edwards ladder answers with one
+  doubling more. A nonce reaches one with probability of the order of two
+  divided by the order itself;
+* a point that reports no order is recoded against its curve instead of
+  against an order, Hasse's theorem bounding every order the curve could hold
+  by `2**(bit_length(p) + 1)`. That covers the ECDH case the advisory names: a
+  public point decoded from an encoding carries no order, and an exchange
+  against such a peer key costs 73 point additions and 257 doublings on
+  NIST256p whatever the private key is, where releases up to 0.19.1 spent
+  exactly the bit length of that key in doublings. It is one addition more than
+  the 72 and 257 the same exchange costs against a public key this process
+  derived from a `SigningKey`, the extra one being the correction that stands
+  in for the missing order;
+* an order that is even or below 17 cannot be recoded at all, and a point of
+  one keeps the older ladder, whose cost follows its multiplier. Every
+  registered curve declares an odd order of at least 110 bits, so neither
+  reaches one. The same ladder answers a negative multiplier of a point with no
+  order, and one wider than every group of its curve, neither of which a
+  private key or a nonce can be.
+
+This is local hardening only. No release is recorded anywhere as fixing
+CVE-2024-23342 -- the advisory lists every version as affected and none as
+patched -- so a vulnerability scanner will keep reporting CVE-2024-23342 and
+PYSEC-2026-1325 against this library whether or not the countermeasure is
+present.
+
+**Compatibility.** Signatures are byte for byte the ones earlier releases
+produced, RFC 6979 deterministic signatures stay reproducible byte for byte,
+and public call signatures, key encodings, signature encodings and return types
+are unchanged. Three things did change, and this is the whole list:
+
+* a pickled point still carries the plain instance dictionary, but the
+  precomputation table inside it holds a new layout. A table an earlier release
+  wrote is recognised, discarded and lazily rebuilt; the opposite direction is
+  not guarded and cannot be, so a state written here and read by a release older
+  than the countermeasure would answer with a wrong point rather than raise;
+* a multiplier is read for the integer it stands for, and one standing for none
+  is refused with a `TypeError` naming its type. A `float`, `Fraction` or
+  `Decimal` with no fractional part stands for one integer and is answered with
+  that multiple of the point as it always was -- and on the affine path too
+  now, where it used to raise. One with a fraction, a `complex`, and a value
+  that is merely false stand for none and are refused, where earlier releases
+  read them as a zero or answered them with the point for some other integer.
+  A `Decimal` naming an integer one digit wider than the `decimal` context can
+  hold is refused as well, and is the only value earlier releases answered
+  correctly that this one does not; `SECURITY.md` has the whole of it;
+* signing draws one blinding factor per signature, so it reads `os.urandom()`
+  even when the caller supplied the nonce or asked for the deterministic one of
+  RFC 6979. That draw is separate from the `entropy=` argument and does not
+  reach the signature; should the source refuse, signing raises `RuntimeError`
+  rather than dropping the blinding.
+
+**The reduction is measured, not assumed.**
+`src/ecdsa/test_side_channel.py` pins the point operation counts above to exact
+numbers and runs as part of the normal test suite. `minerva_probe.py`, in the
+repository root, measures the wall clock signal that remains: it times
+signatures, groups them by the bit length of the nonce behind each one, and
+applies the statistical battery the external `tlsfuzzer` harness applies to the
+same question. It reports the earliest rejecting configured prefix of
+`PREFIX_SIZES`, or that no rejection occurred at the tested prefixes through
+the largest of them -- an observation about those prefixes and nothing more,
+from which no threshold is inferred. It is opt-in and deliberately **not** part
+of the default test run or of CI, a statistical timing measurement being
+unusable as a pass/fail gate:
+
+```
+tox -e leak
+```
+
+It exits 0 when it produced a usable report, 1 when its own self-check failed,
+and 2 when it could not produce a report it is willing to stand behind. It
+certifies nothing: a smaller measured signal is a smaller measured signal and
+no more than that. [`SECURITY.md`][4] is the canonical description of the
+countermeasure, its coverage, its compatibility notes and the residual risk.
+
+Please also note that any Pure-python cryptographic library will remain
+vulnerable to side-channel attacks whatever is done at the level described
+above. This is because Python does not provide side-channel secure primitives
+(with the exception of [`hmac.compare_digest()`][3]), and gives a program no
+control over the width or the cost of the integer operations it performs,
+making side-channel secure programming impossible. That is the reason a
+residual signal remains, and the reason nothing stronger than a measured
+reduction is claimed here. If you need more than that, use a quality wrapper
+around a hardened native implementation, as suggested above, rather than this
+library.
 
 This library depends upon a strong source of random numbers. Do not use it on
 a system where `os.urandom()` does not provide cryptographically secure
 random numbers.
 
 [3]: https://docs.python.org/3/library/hmac.html#hmac.compare_digest
+[4]: https://github.com/tlsfuzzer/python-ecdsa/blob/master/SECURITY.md
+[5]: https://nvd.nist.gov/vuln/detail/CVE-2024-23342
+[6]: https://github.com/tlsfuzzer/python-ecdsa/security/advisories/GHSA-wj6h-64fc-37mp
+[7]: https://minerva.crocs.fi.muni.cz/
 
 ## Usage
 
@@ -521,6 +652,13 @@ signature must use a different one (using the same number twice will
 immediately reveal the private signing key). The `sk.sign()` method takes an
 `entropy=` argument which behaves the same as `SigningKey.generate(entropy=)`.
 
+Signing draws one further value that `entropy=` does not control: the factor
+that blinds the modular inversion, described under [Security](#security). It
+comes from `os.urandom()`: one factor per signature whatever the nonce was,
+obtained with at least one read of that source and with more whenever a draw is
+discarded. It does not change the signature produced, and signing raises
+`RuntimeError` rather than dropping the blinding should that source refuse.
+
 ## Deterministic Signatures
 
 If you call `SigningKey.sign_deterministic(data)` instead of `.sign(data)`,
@@ -530,8 +668,14 @@ derived from the private key and the message being signed. Each time you sign
 the same message with the same key, you will get the same signature (using
 the same `k`).
 
-This may become the default in a future version, as it is not vulnerable to
-failures of the entropy source.
+This may become the default in a future version, as the nonce it uses is not
+vulnerable to failures of the entropy source. That holds for the nonce rather
+than for the whole signing operation: the factor that blinds the modular
+inversion described under [Security](#security) is drawn afresh for every
+signature, so a deterministic signature does read from `os.urandom()`, and
+signing raises `RuntimeError` if that source refuses. The signature itself is
+unaffected, the blinding cancelling exactly, so the same key and the same
+message still give the same signature byte for byte.
 
 ## Examples
 
